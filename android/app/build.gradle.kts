@@ -38,4 +38,5 @@ dependencies {
     implementation(libs.material)
     implementation(libs.tflite)
     implementation(libs.tflite.support)
+    testImplementation(libs.junit)
 }

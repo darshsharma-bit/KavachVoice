@@ -6,17 +6,21 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import kotlinx.coroutines.*
-import kotlin.math.abs
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.sqrt
 
 /**
- * Real-time audio scanner — runs on a background coroutine, reads PCM from mic,
- * measures RMS energy, and matches speech bursts against the Hindi/Hinglish fraud
- * keyword sets using a sliding window of transcribed tokens.
+ * Authoritative Layer 2 Audio Capture & Keyword Scanning Module.
  *
- * Full ASR is out of scope for the hackathon build window. This implementation uses
- * energy-gated keyword spotting: when RMS crosses the speech threshold we buffer
- * 2 seconds of audio, run the TFLite phoneme model (if loaded), and fall back to
- * a deterministic rule that fires on command for the demo via [simulateKeywords].
+ * Architecture Constraints (Ratified for API 26+ Compatibility):
+ * 1. Single authoritative microphone capture path: ENCODING_PCM_16BIT, 16000 Hz, MONO.
+ *    PCM_FLOAT is avoided at the hardware level due to HAL incompatibilities on older Android 8.0/8.1 chipsets.
+ *    Short PCM16 samples are converted to in-memory normalized floats [-1.0f, 1.0f] only where needed.
+ * 2. Honest Keyword Spotting: The legacy amplitude-burst heuristic has been completely eliminated.
+ *    No noise, clapping, or tapping can falsely trigger OTP / urgency alerts.
+ *    The bundled keyword_model.tflite is an 8-byte placeholder and is explicitly recognized as such.
+ * 3. Deterministic SIH Demo Triggers: Provides reliable, labeled simulation events for demo evaluation
+ *    without faking speech recognition capabilities.
  */
 class KeywordScanner(
     private val context: Context,
@@ -25,119 +29,234 @@ class KeywordScanner(
     private val tag = "KeywordScanner"
     private val sampleRate = 16000
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
-    private val encoding = AudioFormat.ENCODING_PCM_FLOAT
-    private val minBuf = AudioRecord.getMinBufferSize(sampleRate, channelConfig, encoding)
+    private val audioEncoding = AudioFormat.ENCODING_PCM_16BIT
 
-    // 2-second sliding buffer for keyword window
-    private val windowSamples = sampleRate * 2
-    private val slidingWindow = FloatArray(windowSamples)
-    private var windowHead = 0
-
-    private var job: Job? = null
     private var recorder: AudioRecord? = null
+    private var job: Job? = null
+    private val isRecording = AtomicBoolean(false)
+    private val lock = Any()
 
-    // For demo: allows manual trigger without needing actual speech
-    @Volatile var demoMode = false
+    // Calculated buffer size for 16kHz 16-bit mono
+    private val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioEncoding)
+    private val bufferSize = if (minBufferSize > 0) minBufferSize * 2 else 4096
+
+    // Bounded rolling buffer for VoiceID RawNet2 (4.0 seconds = 64,000 samples @ 16kHz mono)
+    companion object {
+        const val WINDOW_SAMPLES = 64000
+        // -36 dBFS threshold for ambient voice activity detection
+        private const val SPEECH_RMS_THRESHOLD = 0.015f
+    }
+
+    private val rollingBuffer = ShortArray(WINDOW_SAMPLES)
+    private var writeHead = 0
+    @Volatile private var totalSamplesRecorded = 0L
+    private val bufferLock = Any()
+
+    // Analysis worker job for periodic VoiceID window emission
+    private var analysisJob: Job? = null
+    var onAudioWindowAvailable: ((ShortArray) -> Unit)? = null
+
+    // Speech presence metrics (for diagnostic VAD, NOT lexical classification)
+    @Volatile var currentRms: Float = 0f
+    @Volatile var isSpeechPresent: Boolean = false
 
     fun start() {
-        recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            channelConfig,
-            encoding,
-            minBuf * 4,
-        )
-        recorder?.startRecording()
+        synchronized(lock) {
+            if (isRecording.get()) {
+                Log.d(tag, "KeywordScanner is already running")
+                return
+            }
 
-        job = CoroutineScope(Dispatchers.Default).launch {
-            val chunk = FloatArray(minBuf / 4)
-            while (isActive) {
-                val read = recorder?.read(chunk, 0, chunk.size, AudioRecord.READ_BLOCKING) ?: 0
-                if (read <= 0) continue
+            if (minBufferSize <= 0) {
+                Log.e(tag, "Invalid AudioRecord buffer configuration: minBufferSize=$minBufferSize")
+                return
+            }
 
-                val rms = rms(chunk, read)
+            try {
+                val newRecorder = AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    sampleRate,
+                    channelConfig,
+                    audioEncoding,
+                    bufferSize
+                )
 
-                // Write into sliding window
-                for (i in 0 until read) {
-                    slidingWindow[windowHead % windowSamples] = chunk[i]
-                    windowHead++
+                if (newRecorder.state != AudioRecord.STATE_INITIALIZED) {
+                    Log.e(tag, "AudioRecord initialization failed (state != STATE_INITIALIZED)")
+                    newRecorder.release()
+                    return
                 }
 
-                if (demoMode) {
-                    demoMode = false
-                    // Fire OTP keyword sequence for demo Moment 3
-                    withContext(Dispatchers.Main) {
-                        onDetected(listOf("otp", "बताइए", "jaldi"))
+                newRecorder.startRecording()
+                if (newRecorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    Log.e(tag, "AudioRecord failed to enter RECORDING state")
+                    newRecorder.release()
+                    return
+                }
+
+                recorder = newRecorder
+                isRecording.set(true)
+                Log.i(tag, "Authoritative microphone capture started (16kHz, Mono, PCM-16, API 26+ safe)")
+            } catch (e: SecurityException) {
+                Log.e(tag, "Missing RECORD_AUDIO permission: ${e.message}")
+                return
+            } catch (e: Exception) {
+                Log.e(tag, "Exception during AudioRecord startup: ${e.message}", e)
+                return
+            }
+
+            // AudioRecord Capture Loop (Zero network or disk I/O, non-blocking)
+            job = CoroutineScope(Dispatchers.Default).launch {
+                val shortBuffer = ShortArray(bufferSize / 2)
+
+                while (isActive && isRecording.get()) {
+                    val currentRec = recorder ?: break
+                    val readSamples = currentRec.read(shortBuffer, 0, shortBuffer.size, AudioRecord.READ_BLOCKING)
+
+                    if (readSamples <= 0) {
+                        when (readSamples) {
+                            AudioRecord.ERROR_INVALID_OPERATION ->
+                                Log.w(tag, "AudioRecord read returned ERROR_INVALID_OPERATION")
+                            AudioRecord.ERROR_BAD_VALUE ->
+                                Log.w(tag, "AudioRecord read returned ERROR_BAD_VALUE")
+                            AudioRecord.ERROR_DEAD_OBJECT -> {
+                                Log.e(tag, "AudioRecord returned ERROR_DEAD_OBJECT — stopping recording")
+                                break
+                            }
+                        }
+                        delay(10)
+                        continue
                     }
-                    continue
-                }
 
-                // Energy gate: only analyze when speech-level audio present
-                if (rms > SPEECH_RMS_THRESHOLD) {
-                    val keywords = matchKeywords(slidingWindow)
-                    if (keywords.isNotEmpty()) {
-                        Log.w(tag, "Keyword hit: $keywords (RMS=$rms)")
-                        withContext(Dispatchers.Main) { onDetected(keywords) }
+                    // Convert PCM16 to float in memory only for RMS / VAD observation
+                    val rms = computePcm16Rms(shortBuffer, readSamples)
+                    currentRms = rms
+                    isSpeechPresent = rms > SPEECH_RMS_THRESHOLD
+
+                    // Write into bounded circular rolling buffer for VoiceID (64,000 samples = 4.0s)
+                    synchronized(bufferLock) {
+                        for (i in 0 until readSamples) {
+                            rollingBuffer[writeHead] = shortBuffer[i]
+                            writeHead = (writeHead + 1) % WINDOW_SAMPLES
+                        }
+                        totalSamplesRecorded += readSamples
                     }
                 }
             }
+
+            // Analysis Worker: Periodically dispatches 4-second audio windows to VoiceIdClient
+            analysisJob = CoroutineScope(Dispatchers.Default).launch {
+                // Initial accumulation delay
+                delay(4000)
+                while (isActive && isRecording.get()) {
+                    if (totalSamplesRecorded >= WINDOW_SAMPLES) {
+                        val window = getLatestAudioWindow()
+                        if (window != null) {
+                            Log.d(tag, "Emitting rolling audio window (${window.size} samples, RMS=$currentRms, speechPresent=$isSpeechPresent)")
+                            onAudioWindowAvailable?.invoke(window)
+                        }
+                    }
+                    delay(3500) // Emit windows with ~0.5s overlap
+                }
+            }
         }
-        Log.d(tag, "KeywordScanner started")
     }
+
+    /**
+     * Retrieve the latest 4.0-second window (64,000 samples) in chronological order.
+     */
+    fun getLatestAudioWindow(): ShortArray? {
+        synchronized(bufferLock) {
+            if (totalSamplesRecorded < WINDOW_SAMPLES) return null
+            val window = ShortArray(WINDOW_SAMPLES)
+            val start = writeHead
+            for (i in 0 until WINDOW_SAMPLES) {
+                window[i] = rollingBuffer[(start + i) % WINDOW_SAMPLES]
+            }
+            return window
+        }
+    }
+
+    fun getTotalSamplesRecorded(): Long = totalSamplesRecorded
 
     fun stop() {
-        job?.cancel()
-        recorder?.stop()
-        recorder?.release()
-        recorder = null
-        Log.d(tag, "KeywordScanner stopped")
-    }
+        synchronized(lock) {
+            isRecording.set(false)
+            job?.cancel()
+            job = null
+            analysisJob?.cancel()
+            analysisJob = null
 
-    /**
-     * Trigger demo keyword sequence externally (e.g. from a debug button in MainActivity).
-     * Sets the flag; the scanner loop will fire on next audio chunk.
-     */
-    fun triggerDemoKeywords() {
-        demoMode = true
-    }
-
-    private fun rms(buf: FloatArray, len: Int): Float {
-        if (len == 0) return 0f
-        var sum = 0.0
-        for (i in 0 until len) sum += (buf[i] * buf[i]).toDouble()
-        return kotlin.math.sqrt(sum / len).toFloat()
-    }
-
-    /**
-     * Rule-based keyword matching against the sliding window.
-     * In the PCM float domain we can't do lexical matching directly, so this
-     * approximates by checking energy patterns that correlate with stressed syllables.
-     * The TFLite path (when keyword_model.tflite is present) replaces this entirely.
-     *
-     * For hackathon: this function is intentionally demo-able via [triggerDemoKeywords].
-     */
-    private fun matchKeywords(window: FloatArray): List<String> {
-        // Count high-energy bursts (stressed syllable proxy)
-        var bursts = 0
-        var inBurst = false
-        for (sample in window) {
-            if (abs(sample) > SYLLABLE_ENERGY) {
-                if (!inBurst) { bursts++; inBurst = true }
-            } else {
-                inBurst = false
+            try {
+                recorder?.let {
+                    if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                        it.stop()
+                    }
+                    it.release()
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Error during AudioRecord stop/release: ${e.message}")
+            } finally {
+                recorder = null
+                isSpeechPresent = false
+                currentRms = 0f
+                synchronized(bufferLock) {
+                    writeHead = 0
+                    totalSamplesRecorded = 0L
+                }
+                Log.i(tag, "KeywordScanner stopped and microphone released")
             }
         }
-        // Heuristic: 8–20 bursts in 2s ≈ 4–10 syllables ≈ a short command phrase
-        return when {
-            bursts in 14..20 -> listOf("otp", "बताइए")      // "OTP bataiye" cadence
-            bursts in 8..13  -> listOf("jaldi", "तुरंत")     // urgency word cadence
-            bursts > 20      -> listOf("account band", "गिरफ्तार") // longer threat phrase
-            else             -> emptyList()
+    }
+
+    /**
+     * Backward-compatible trigger for MainActivity 3x-tap demo.
+     */
+    fun triggerDemoKeywords() {
+        triggerDemoFraudKeywords()
+    }
+
+    /**
+     * Explicit deterministic DEMO/SIMULATION trigger for Fraud Keywords (SIH Demo Moment 3).
+     * Dispatches explicit fraud tokens without hallucinating ML capability.
+     */
+    fun triggerDemoFraudKeywords(keywords: List<String> = listOf("otp", "बताइए")) {
+        Log.i(tag, "Deterministic DEMO fraud keyword signal triggered: $keywords")
+        CoroutineScope(Dispatchers.Main).launch {
+            onDetected(keywords)
         }
     }
 
-    companion object {
-        private const val SPEECH_RMS_THRESHOLD = 0.015f   // ~-36 dBFS
-        private const val SYLLABLE_ENERGY = 0.08f
+    /**
+     * Explicit deterministic DEMO/SIMULATION trigger for Urgency Keywords.
+     */
+    fun triggerDemoUrgencyKeywords(keywords: List<String> = listOf("jaldi", "तुरंत")) {
+        Log.i(tag, "Deterministic DEMO urgency keyword signal triggered: $keywords")
+        CoroutineScope(Dispatchers.Main).launch {
+            onDetected(keywords)
+        }
+    }
+
+    /**
+     * Explicit deterministic DEMO/SIMULATION trigger for combined Fraud + Urgency Keywords.
+     */
+    fun triggerDemoAllKeywords() {
+        Log.i(tag, "Deterministic DEMO combined fraud+urgency keyword signal triggered")
+        CoroutineScope(Dispatchers.Main).launch {
+            onDetected(listOf("otp", "बताइए", "jaldi", "तुरंत"))
+        }
+    }
+
+    /**
+     * Compute Root Mean Square (RMS) energy directly from PCM16 samples normalized to [-1.0, 1.0].
+     */
+    private fun computePcm16Rms(buffer: ShortArray, length: Int): Float {
+        if (length <= 0) return 0f
+        var sumSquares = 0.0
+        for (i in 0 until length) {
+            val normalized = buffer[i] / 32768.0f
+            sumSquares += (normalized * normalized)
+        }
+        return sqrt(sumSquares / length).toFloat()
     }
 }
