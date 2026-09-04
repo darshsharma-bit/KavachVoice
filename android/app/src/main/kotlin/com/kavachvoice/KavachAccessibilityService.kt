@@ -54,15 +54,26 @@ class KavachAccessibilityService : AccessibilityService() {
         startForegroundService(Intent(this, KavachForegroundService::class.java))
     }
 
+    private var lastWindowChangeTime = 0L
+
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
-        val pkg = event.packageName?.toString() ?: return
-        Log.d(tag, "Window changed: $pkg")
+        // Filter: Must be an interactive Activity, ignoring background push notifications & toasts
+        val className = event.className?.toString() ?: return
+        if (!className.contains("Activity")) return
 
-        // Layer 2: UPI app detection during active call
+        // Debounce: 500ms window to ignore transient UI transitions
+        val now = System.currentTimeMillis()
+        if (now - lastWindowChangeTime < 500) return
+        lastWindowChangeTime = now
+
+        val pkg = event.packageName?.toString() ?: return
+        Log.d(tag, "Foreground Activity: $className ($pkg)")
+
+        // Layer 2: UPI payment app detection during active call
         if (pkg in upiPackages && isCallActive()) {
-            Log.w(tag, "UPI app $pkg detected during active call — triggering Layer 2")
+            Log.w(tag, "UPI payment app $pkg foregrounded during active call — triggering Layer 2 Alert")
             callGuard?.onUpiAppDetectedDuringCall(pkg)
         }
     }
@@ -85,8 +96,22 @@ class KavachAccessibilityService : AccessibilityService() {
 
     fun getKeywordScanner(): KeywordScanner? = keywordScanner
 
-    private fun isCallActive(): Boolean {
+    fun triggerSimulation() {
+        Log.w(tag, "Triggering internal Demo Moment 3 simulation")
+        callGuard?.onKeywordsDetected(listOf("otp", "बताइए", "jaldi"))
+    }
+
+    fun isCallActive(): Boolean {
         val tm = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
-        return tm.callState == TelephonyManager.CALL_STATE_OFFHOOK
+        val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+
+        // 1. Standard SIM Cellular call
+        val isCellular = tm.callState == TelephonyManager.CALL_STATE_OFFHOOK
+
+        // 2. VoIP / WhatsApp / Telegram call (Android sets MODE_IN_COMMUNICATION)
+        val isVoip = am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION ||
+                am.mode == android.media.AudioManager.MODE_IN_CALL
+
+        return isCellular || isVoip
     }
 }

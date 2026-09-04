@@ -12,14 +12,24 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 
-class MainActivity : Activity() {
+import android.Manifest
+import android.content.pm.PackageManager
+import android.speech.tts.TextToSpeech
+import java.util.Locale
+
+class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private var tapCount = 0
     private val tapHandler = Handler(Looper.getMainLooper())
+    private var tts: TextToSpeech? = null
+    private val PERMISSIONS_REQUEST_CODE = 1001
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        checkAndRequestPermissions()
+        initLanguageOnboarding()
 
         findViewById<Button>(R.id.btnEnableAccessibility).setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -87,8 +97,51 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun checkAndRequestPermissions() {
+        val permissions = mutableListOf<String>()
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.READ_PHONE_STATE)
+        }
+        if (permissions.isNotEmpty()) {
+            requestPermissions(permissions.toTypedArray(), PERMISSIONS_REQUEST_CODE)
+        }
+    }
+
+    private fun initLanguageOnboarding() {
+        tts = TextToSpeech(this, this)
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            val prefs = getSharedPreferences("kavach_prefs", MODE_PRIVATE)
+            val welcomed = prefs.getBoolean("welcomed", false)
+            if (!welcomed) {
+                val locale = Locale.getDefault()
+                val lang = locale.language
+                val prompt = when (lang) {
+                    "hi" -> "कवच वॉइस सुरक्षा सक्रिय है।"
+                    "mr" -> "कवच व्हॉईस सुरक्षा सुरू आहे."
+                    "ta" -> "கவச் வாய்ஸ் பாதுகாப்பு செயல்படுகிறது."
+                    "te" -> "కవచ్ వాయిస్ భద్రత సక్రియంగా ఉంది."
+                    "bn" -> "কবচ ভয়েস সুরক্ষা সক্রিয় রয়েছে।"
+                    else -> "KavachVoice protection is active."
+                }
+                tts?.language = locale
+                tts?.speak(prompt, TextToSpeech.QUEUE_FLUSH, null, "welcome_audio")
+                prefs.edit().putBoolean("welcomed", true).apply()
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         tapHandler.removeCallbacksAndMessages(null)
+        try {
+            tts?.stop()
+            tts?.shutdown()
+        } catch (_: Exception) {}
     }
 }

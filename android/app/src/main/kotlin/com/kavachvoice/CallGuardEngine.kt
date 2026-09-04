@@ -12,6 +12,8 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import org.tensorflow.lite.Interpreter
+import android.speech.tts.TextToSpeech
+import java.util.Locale
 import java.io.FileInputStream
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
@@ -25,10 +27,12 @@ import java.nio.channels.FileChannel
 class CallGuardEngine(
     private val context: Context,
     private val upiPackages: Set<String>,
-) {
+) : TextToSpeech.OnInitListener {
     private val tag = "CallGuard"
     private var tflite: Interpreter? = null
     private var overlayContainer: LinearLayout? = null
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
     private val handler = Handler(Looper.getMainLooper())
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
 
@@ -57,23 +61,45 @@ class CallGuardEngine(
             0L,
         ),
         RED(
-            Color.parseColor("#1A0000"),
             Color.parseColor("#D50000"),
+            Color.parseColor("#FFFFFF"),
             "🛑",
-            "STOP — Do NOT Share OTP",
-            "OTP request detected. No legitimate caller ever asks for this. Hang up now.",
+            "STOP — DO NOT TRANSFER OR SHARE OTP",
+            "सावधान! Urgent scam pattern detected during active call. Hang up immediately.",
             0L,
         ),
     }
 
     fun start() {
         loadKeywordModel()
+        try {
+            tts = TextToSpeech(context, this)
+        } catch (e: Exception) {
+            Log.w(tag, "TTS initialization failed: ${e.message}")
+        }
         Log.d(tag, "CallGuard started — model ${if (tflite != null) "LOADED" else "rule-based fallback"}")
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            val result = tts?.setLanguage(Locale("hi", "IN"))
+            ttsReady = result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED
+            if (!ttsReady) {
+                // Fallback to default device locale
+                tts?.setLanguage(Locale.getDefault())
+                ttsReady = true
+            }
+            Log.d(tag, "TTS ready: $ttsReady")
+        }
     }
 
     fun stop() {
         dismissOverlay()
         tflite?.close()
+        try {
+            tts?.stop()
+            tts?.shutdown()
+        } catch (_: Exception) {}
         Log.d(tag, "CallGuard stopped")
     }
 
@@ -109,6 +135,19 @@ class CallGuardEngine(
             val root = buildOverlayView(level)
             overlayContainer = root
             wm.addView(root, params)
+
+            if (level == AlertLevel.RED && ttsReady) {
+                try {
+                    tts?.speak(
+                        "सावधान! यह कॉल धोखा हो सकती है। कोई भी यूपीआई पिन दर्ज न करें।",
+                        TextToSpeech.QUEUE_FLUSH,
+                        null,
+                        "kavach_fraud_alert"
+                    )
+                } catch (e: Exception) {
+                    Log.w(tag, "TTS speak failed: ${e.message}")
+                }
+            }
 
             if (level.autoDismissMs > 0) {
                 handler.postDelayed({ dismissOverlay() }, level.autoDismissMs)
@@ -191,8 +230,22 @@ class CallGuardEngine(
             ).also { it.topMargin = (5 * dp).toInt() }
         }
 
+        val dismissBtn = TextView(context).apply {
+            text = "✕ Dismiss Alert"
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setBackgroundColor(Color.parseColor("#33FFFFFF"))
+            setPadding((12 * dp).toInt(), (6 * dp).toInt(), (12 * dp).toInt(), (6 * dp).toInt())
+            setOnClickListener { dismissOverlay() }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = (8 * dp).toInt() }
+        }
+
         content.addView(titleRow)
         content.addView(bodyView)
+        content.addView(dismissBtn)
 
         root.addView(stripe)
         root.addView(content)
