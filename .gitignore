@@ -1,0 +1,30 @@
+# models/ and demo/ — large binary files, weights, audio clips
+models/uap/*.bin
+models/voiceid/*.pt
+models/voiceid/*.pth
+demo/*.wav
+demo/*.mp4
+demo/*.mp3
+
+# Android build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# Python
+backend/__pycache__/
+backend/venv/
+backend/.env
+backend/*.pyc
+backend/reports/*.pdf
+
+# Node
+dashboard/node_modules/
+dashboard/.next/
+dashboard/dist/
+dashboard/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
