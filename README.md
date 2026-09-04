@@ -1,4 +1,4 @@
-# KavachVoice (कवच-वॉइस) 🛡️🎙️
+# KavachVoice 
 ### AI-Powered Real-Time Detection & Prevention of Voice Cloning Impersonation Attacks
 
 [![Smart India Hackathon 2026](https://img.shields.io/badge/SIH-2026-orange.svg?style=for-the-badge)](https://sih.gov.in)
