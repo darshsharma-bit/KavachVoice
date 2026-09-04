@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -12,7 +13,9 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import java.io.InputStream
@@ -23,18 +26,42 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     companion object {
         private const val TAG = "MainActivity"
         private const val PERMISSIONS_REQUEST_CODE = 1001
+        private const val PREFS_LANG = "pref_selected_lang"
     }
 
     private var tapCount = 0
     private val tapHandler = Handler(Looper.getMainLooper())
+    private val uiRefreshHandler = Handler(Looper.getMainLooper())
     private var tts: TextToSpeech? = null
     private lateinit var voiceIdClient: VoiceIdClient
 
+    // Consumer UI Elements
     private lateinit var tvProtectionStatus: TextView
+    private lateinit var tvHeroIcon: TextView
+    private lateinit var tvHeroExplanation: TextView
+    private lateinit var tvCallMonitoringStatus: TextView
+    private lateinit var tvMicStatus: TextView
     private lateinit var tvAccessibilityStatus: TextView
     private lateinit var tvBatteryStatus: TextView
+    private lateinit var btnLangEn: TextView
+    private lateinit var btnLangHi: TextView
+
+    // Collapsible Diagnostics Elements
+    private lateinit var btnToggleDiagnostics: TextView
+    private lateinit var layoutDiagnostics: LinearLayout
     private lateinit var tvVoiceIdStatus: TextView
     private lateinit var tvVoiceIdDetails: TextView
+
+    private var isHindi = false
+    private var backendOnline = false
+    private var lastBackendInfo = ""
+
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            updateStatus()
+            uiRefreshHandler.postDelayed(this, 1500)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,15 +69,45 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
         voiceIdClient = VoiceIdClient(this)
 
+        val prefs = getSharedPreferences("kavach_prefs", MODE_PRIVATE)
+        isHindi = prefs.getString(PREFS_LANG, "en") == "hi"
+
+        // Initialize Consumer Views
         tvProtectionStatus = findViewById(R.id.tvProtectionStatus)
+        tvHeroIcon = findViewById(R.id.tvHeroIcon)
+        tvHeroExplanation = findViewById(R.id.tvHeroExplanation)
+        tvCallMonitoringStatus = findViewById(R.id.tvCallMonitoringStatus)
+        tvMicStatus = findViewById(R.id.tvMicStatus)
         tvAccessibilityStatus = findViewById(R.id.tvAccessibilityStatus)
         tvBatteryStatus = findViewById(R.id.tvBatteryStatus)
+        btnLangEn = findViewById(R.id.btnLangEn)
+        btnLangHi = findViewById(R.id.btnLangHi)
+
+        // Initialize Collapsible Diagnostics Views
+        btnToggleDiagnostics = findViewById(R.id.btnToggleDiagnostics)
+        layoutDiagnostics = findViewById(R.id.layoutDiagnostics)
         tvVoiceIdStatus = findViewById(R.id.tvVoiceIdStatus)
         tvVoiceIdDetails = findViewById(R.id.tvVoiceIdDetails)
 
         checkAndRequestPermissions()
         initLanguageOnboarding()
 
+        // Setup Language Switching
+        btnLangEn.setOnClickListener { setLanguage(false) }
+        btnLangHi.setOnClickListener { setLanguage(true) }
+
+        // Setup Collapsible Diagnostics Toggle
+        btnToggleDiagnostics.setOnClickListener {
+            if (layoutDiagnostics.visibility == View.VISIBLE) {
+                layoutDiagnostics.visibility = View.GONE
+                btnToggleDiagnostics.text = "🛠️ Developer & Demo Diagnostics  [▼]"
+            } else {
+                layoutDiagnostics.visibility = View.VISIBLE
+                btnToggleDiagnostics.text = "🛠️ Developer & Demo Diagnostics  [▲]"
+            }
+        }
+
+        // Essential Permission Actions
         findViewById<Button>(R.id.btnEnableAccessibility).setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
@@ -62,21 +119,42 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             startActivity(intent)
         }
 
-        // VoiceID Backend Actions
-        findViewById<Button>(R.id.btnVoiceIdHealth).setOnClickListener {
-            pingBackendHealth()
+        // Diagnostics Actions
+        findViewById<Button>(R.id.btnVoiceIdHealth).setOnClickListener { pingBackendHealth() }
+        findViewById<Button>(R.id.btnTestLiveMicVoice).setOnClickListener { testLiveMicVoice() }
+        findViewById<Button>(R.id.btnTestGenuineVoice).setOnClickListener { testAssetVoice("genuine_test.wav", "GENUINE") }
+        findViewById<Button>(R.id.btnTestSyntheticVoice).setOnClickListener { testAssetVoice("synthetic_test.wav", "SYNTHETIC") }
+
+        // SIH Demo Moment 3 Triggers
+        findViewById<Button>(R.id.btnDemoClonedVoice).setOnClickListener {
+            val svc = KavachAccessibilityService.instance
+            if (svc != null) {
+                svc.getCallGuard()?.triggerDemoSimulation()
+                Toast.makeText(this, "SIH Demo: Moment 3 Cloned Voice Simulated", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Enable Accessibility Service first", Toast.LENGTH_SHORT).show()
+            }
         }
 
-        findViewById<Button>(R.id.btnTestLiveMicVoice).setOnClickListener {
-            testLiveMicVoice()
+        findViewById<Button>(R.id.btnDemoFraudKeywords).setOnClickListener {
+            val svc = KavachAccessibilityService.instance
+            svc?.getCallGuard()?.resetKeywords()
+            svc?.getKeywordScanner()?.triggerDemoFraudKeywords()
+            Toast.makeText(this, "DEMO: Deterministic fraud keywords signaled", Toast.LENGTH_SHORT).show()
         }
 
-        findViewById<Button>(R.id.btnTestGenuineVoice).setOnClickListener {
-            testAssetVoice("genuine_test.wav", "GENUINE")
+        findViewById<Button>(R.id.btnDemoUrgencyKeywords).setOnClickListener {
+            val svc = KavachAccessibilityService.instance
+            svc?.getCallGuard()?.resetKeywords()
+            svc?.getKeywordScanner()?.triggerDemoUrgencyKeywords()
+            Toast.makeText(this, "DEMO: Deterministic urgency keywords signaled", Toast.LENGTH_SHORT).show()
         }
 
-        findViewById<Button>(R.id.btnTestSyntheticVoice).setOnClickListener {
-            testAssetVoice("synthetic_test.wav", "SYNTHETIC")
+        findViewById<Button>(R.id.btnDemoReset).setOnClickListener {
+            val svc = KavachAccessibilityService.instance
+            svc?.getCallGuard()?.resetKeywords()
+            Toast.makeText(this, "CallGuard State Reset", Toast.LENGTH_SHORT).show()
+            updateStatus()
         }
 
         // 3x-tap on version label triggers demo keyword mode (Moment 3 fallback)
@@ -91,8 +169,41 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             }
         }
 
+        updateLanguageUI()
         updateStatus()
         handleIntent(intent)
+    }
+
+    private fun setLanguage(hindi: Boolean) {
+        isHindi = hindi
+        val prefs = getSharedPreferences("kavach_prefs", MODE_PRIVATE)
+        prefs.edit().putString(PREFS_LANG, if (hindi) "hi" else "en").apply()
+        updateLanguageUI()
+        updateStatus()
+    }
+
+    private fun updateLanguageUI() {
+        if (isHindi) {
+            btnLangHi.setBackgroundColor(Color.WHITE)
+            btnLangHi.setTextColor(Color.parseColor("#0F172A"))
+            btnLangEn.setBackgroundColor(Color.TRANSPARENT)
+            btnLangEn.setTextColor(Color.parseColor("#64748B"))
+
+            findViewById<TextView>(R.id.tvAppSubtitle).text = "आवाज़ सुरक्षा शील्ड • Real-Time Voice Shield"
+            findViewById<TextView>(R.id.tvSectionProtection).text = "सुरक्षा स्थिति (PROTECTION STATUS)"
+            findViewById<TextView>(R.id.tvLabelCallMonitoring).text = "कॉल मॉनिटरिंग"
+            findViewById<TextView>(R.id.tvLabelMic).text = "माइक्रोफोन स्थिति"
+        } else {
+            btnLangEn.setBackgroundColor(Color.WHITE)
+            btnLangEn.setTextColor(Color.parseColor("#0F172A"))
+            btnLangHi.setBackgroundColor(Color.TRANSPARENT)
+            btnLangHi.setTextColor(Color.parseColor("#64748B"))
+
+            findViewById<TextView>(R.id.tvAppSubtitle).text = "Voice Fraud Shield • आवाज़ सुरक्षा शील्ड"
+            findViewById<TextView>(R.id.tvSectionProtection).text = "PROTECTION STATUS"
+            findViewById<TextView>(R.id.tvLabelCallMonitoring).text = "Call Monitoring"
+            findViewById<TextView>(R.id.tvLabelMic).text = "Microphone Capture"
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -139,6 +250,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 svc?.getKeywordScanner()?.triggerDemoAllKeywords()
                 Toast.makeText(this, "DEMO: Combined fraud+urgency keywords signaled", Toast.LENGTH_SHORT).show()
             }
+            "clone" -> {
+                svc?.getCallGuard()?.triggerDemoSimulation()
+                Toast.makeText(this, "DEMO: Cloned Voice Alert Triggered", Toast.LENGTH_SHORT).show()
+            }
             "reset" -> {
                 svc?.getCallGuard()?.resetKeywords()
                 Toast.makeText(this, "State reset", Toast.LENGTH_SHORT).show()
@@ -149,32 +264,101 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     override fun onResume() {
         super.onResume()
         updateStatus()
+        uiRefreshHandler.post(refreshRunnable)
+        voiceIdClient.checkHealth { success, info ->
+            backendOnline = success
+            lastBackendInfo = info
+            updateStatus()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        uiRefreshHandler.removeCallbacks(refreshRunnable)
     }
 
     private fun updateStatus() {
         val accessibilityEnabled = isAccessibilityServiceEnabled()
         val batteryOptDisabled = isBatteryOptimizationDisabled()
 
-        tvAccessibilityStatus.text =
-            if (accessibilityEnabled) "Accessibility Service: ACTIVE" else "Accessibility Service: OFF — tap below"
+        tvAccessibilityStatus.text = if (accessibilityEnabled) {
+            if (isHindi) "एक्सेसिबिलिटी सेवा: सक्रिय (ACTIVE)" else "Accessibility Service: ACTIVE"
+        } else {
+            if (isHindi) "एक्सेसिबिलिटी सेवा: बंद — नीचे टैप करें" else "Accessibility Service: OFF — tap below"
+        }
 
-        tvBatteryStatus.text =
-            if (batteryOptDisabled) "Battery Optimization: DISABLED (good)" else "Battery Optimization: ENABLED — tap below"
-
-        tvProtectionStatus.text =
-            if (accessibilityEnabled && batteryOptDisabled) "KavachVoice: PROTECTING" else "KavachVoice: NOT FULLY ACTIVE"
+        tvBatteryStatus.text = if (batteryOptDisabled) {
+            if (isHindi) "बैटरी ऑप्टिमाइज़ेशन: अप्रतिबंधित (Unrestricted)" else "Battery Optimization: DISABLED (Unrestricted)"
+        } else {
+            if (isHindi) "बैटरी ऑप्टिमाइज़ेशन: सीमित — नीचे टैप करें" else "Battery Optimization: ENABLED — tap below"
+        }
 
         val svc = KavachAccessibilityService.instance
+        val isCallActive = svc?.isCallActive() ?: false
+        val isMicActive = svc?.isMicrophoneCapturing() ?: false
+        val sessionId = svc?.getCurrentCallSessionId() ?: 0L
+
+        if (isCallActive) {
+            tvHeroIcon.text = "🛡️"
+            tvProtectionStatus.text = if (isHindi) "कॉल सुरक्षा सक्रिय" else "CALL MONITORING ACTIVE"
+            tvProtectionStatus.setTextColor(Color.parseColor("#15803D"))
+            tvHeroExplanation.text = if (isHindi) {
+                "कॉल का पता चला है। वॉइस सुरक्षा सक्रिय है।\nइस कॉल के लिए माइक्रोफोन मॉनिटरिंग चालू है।"
+            } else {
+                "Call detected. Voice protection is active.\nMicrophone monitoring is enabled for this call."
+            }
+
+            tvCallMonitoringStatus.text = if (isHindi) "सक्रिय (सत्र #$sessionId)" else "ACTIVE (Session #$sessionId)"
+            tvCallMonitoringStatus.setTextColor(Color.parseColor("#15803D"))
+
+            tvMicStatus.text = if (isMicActive) {
+                if (isHindi) "चालू (स्पीकरफोन एकॉस्टिक कैप्चर)" else "ON (Speakerphone Acoustic Capture)"
+            } else {
+                if (isHindi) "प्रतीक्षारत" else "STANDBY"
+            }
+            tvMicStatus.setTextColor(Color.parseColor("#EA580C"))
+        } else {
+            tvHeroIcon.text = "🟢"
+            tvProtectionStatus.text = if (isHindi) "सुरक्षित (PROTECTED)" else "PROTECTED"
+            tvProtectionStatus.setTextColor(Color.parseColor("#1E3A8A"))
+            tvHeroExplanation.text = if (isHindi) {
+                "कवच वॉइस आपकी सुरक्षा कर रहा है।\nकोई कॉल सक्रिय नहीं है। माइक्रोफोन मॉनिटरिंग बंद है।"
+            } else {
+                "KavachVoice is protecting you.\nNo active call. Microphone monitoring is OFF."
+            }
+
+            tvCallMonitoringStatus.text = if (isHindi) "निष्क्रिय — कॉल की प्रतीक्षा में" else "Idle — Waiting for active phone call"
+            tvCallMonitoringStatus.setTextColor(Color.parseColor("#64748B"))
+
+            tvMicStatus.text = if (isHindi) "बंद / OFF (गोपनीयता सुरक्षित)" else "OFF (Inactive when no call is active)"
+            tvMicStatus.setTextColor(Color.parseColor("#16A34A"))
+        }
+
         if (svc != null) {
             val callGuard = svc.getCallGuard()
             if (callGuard != null) {
                 val status = callGuard.getLatestVoiceIdStatus()
-                tvVoiceIdStatus.text = "VoiceID: $status"
-                if (status != "OFFLINE" && status != "UNAVAILABLE") {
-                    val r2 = callGuard.getLatestRawNet2Score()
-                    val ec = callGuard.getLatestEcapaScore()
+                if (isCallActive) {
+                    tvVoiceIdStatus.text = "VoiceID Inference: $status (Active Call)"
+                    tvVoiceIdStatus.setTextColor(Color.parseColor("#EA580C"))
+                    val r2 = (callGuard.getLatestRawNet2Score() * 100).toInt()
+                    val ec = (callGuard.getLatestEcapaScore() * 100).toInt()
                     val lat = callGuard.getLatestVoiceIdLatency().toInt()
-                    tvVoiceIdDetails.text = "RawNet2: $r2 | ECAPA: $ec | Latency: ${lat}ms (REAL ML)"
+                    if (lat > 0) {
+                        tvVoiceIdDetails.text = "RawNet2: $r2% | ECAPA: $ec% | Latency: ${lat}ms (REAL ML)"
+                    } else {
+                        tvVoiceIdDetails.text = "Sampling microphone audio (4.0s rolling window)..."
+                    }
+                } else {
+                    if (backendOnline) {
+                        tvVoiceIdStatus.text = "VoiceID: STANDBY (Server ONLINE)"
+                        tvVoiceIdStatus.setTextColor(Color.parseColor("#16A34A"))
+                        tvVoiceIdDetails.text = "Connected: ${voiceIdClient.getBackendUrl()} (RawNet2 + ECAPA ready)\nInference activates automatically during phone calls"
+                    } else {
+                        tvVoiceIdStatus.text = "VoiceID: STANDBY"
+                        tvVoiceIdStatus.setTextColor(Color.parseColor("#64748B"))
+                        tvVoiceIdDetails.text = "Server: ${voiceIdClient.getBackendUrl()} — Tap 'Ping Backend' to test connection"
+                    }
                 }
             }
         }
@@ -182,15 +366,20 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private fun pingBackendHealth() {
         tvVoiceIdStatus.text = "VoiceID: PINGING..."
-        tvVoiceIdDetails.text = "Connecting to ${voiceIdClient.getBackendUrl()}/health..."
+        tvVoiceIdStatus.setTextColor(Color.parseColor("#2563EB"))
+        tvVoiceIdDetails.text = "Checking server connectivity across endpoints..."
         voiceIdClient.checkHealth { success, info ->
+            backendOnline = success
+            lastBackendInfo = info
             if (success) {
                 tvVoiceIdStatus.text = "VoiceID: BACKEND ONLINE"
-                tvVoiceIdDetails.text = "Health OK: $info"
-                Toast.makeText(this, "VoiceID Backend Online: $info", Toast.LENGTH_SHORT).show()
+                tvVoiceIdStatus.setTextColor(Color.parseColor("#16A34A"))
+                tvVoiceIdDetails.text = "$info\nEndpoint: ${voiceIdClient.getBackendUrl()} (RawNet2 + ECAPA OK)"
+                Toast.makeText(this, "VoiceID Backend ONLINE: $info", Toast.LENGTH_SHORT).show()
             } else {
                 tvVoiceIdStatus.text = "VoiceID: UNAVAILABLE"
-                tvVoiceIdDetails.text = "Failed: $info"
+                tvVoiceIdStatus.setTextColor(Color.parseColor("#DC2626"))
+                tvVoiceIdDetails.text = "Failed: $info\nVerify PC backend is running."
                 Toast.makeText(this, "VoiceID Offline: $info", Toast.LENGTH_LONG).show()
             }
         }
@@ -215,7 +404,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         tvVoiceIdDetails.text = "Transmitting 64,000 PCM16 samples (4.0s) to RawNet2..."
         Log.i(TAG, "VoiceID: REAL inference started for live microphone window (${window.size} samples)")
 
-        voiceIdClient.analyzeAudioAsync(window) { result ->
+        voiceIdClient.analyzeAudioAsync(window, 0L) { result ->
             displayVoiceResult(result, "Live Microphone")
             svc.getCallGuard()?.onVoiceIdResult(result)
         }
@@ -232,7 +421,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         tvVoiceIdDetails.text = "Sending ${bytes.size} bytes from $assetFilename to RawNet2..."
         Log.i(TAG, "VoiceID: REAL inference started for asset: $assetFilename ($expectedLabel)")
 
-        voiceIdClient.analyzeWavBytesAsync(bytes) { result ->
+        voiceIdClient.analyzeWavBytesAsync(bytes, 0L) { result ->
             displayVoiceResult(result, "$expectedLabel ($assetFilename)")
             val svc = KavachAccessibilityService.instance
             svc?.getCallGuard()?.onVoiceIdResult(result)
@@ -243,9 +432,11 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         if (result.isSuccess) {
             val verdict = result.verdict
             val lat = result.latencyMs.toInt()
+            val r2 = (result.rawnet2Score * 100).toInt()
+            val ec = (result.ecapaScore * 100).toInt()
             tvVoiceIdStatus.text = "VoiceID: $verdict VOICE"
-            tvVoiceIdDetails.text = "Source: $source | RawNet2: ${result.rawnet2Score} | ECAPA: ${result.ecapaScore} | Lat: ${lat}ms (REAL ML)"
-            Toast.makeText(this, "REAL ML Verdict: $verdict (RawNet2: ${result.rawnet2Score}) in ${lat}ms", Toast.LENGTH_LONG).show()
+            tvVoiceIdDetails.text = "Source: $source | RawNet2: $r2% | ECAPA: $ec% | Lat: ${lat}ms (REAL ML)"
+            Toast.makeText(this, "REAL ML Verdict: $verdict (RawNet2: $r2%) in ${lat}ms", Toast.LENGTH_LONG).show()
             Log.i(TAG, "VoiceID: REAL inference finished: verdict=$verdict, rawnet2=${result.rawnet2Score}, ecapa=${result.ecapaScore}, latency=${lat}ms")
         } else {
             tvVoiceIdStatus.text = "VoiceID: UNAVAILABLE"
@@ -330,9 +521,11 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         super.onDestroy()
         tapHandler.removeCallbacksAndMessages(null)
+        uiRefreshHandler.removeCallbacksAndMessages(null)
         try {
             tts?.stop()
             tts?.shutdown()
         } catch (_: Exception) {}
     }
 }
+

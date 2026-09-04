@@ -86,7 +86,7 @@ class CallGuardRiskEngineTest {
     }
 
     @Test
-    fun testCase5_CallActive_WithUpi_WithFraudKeyword_ReturnsRed() {
+    fun testCase5_CallActive_WithUpi_WithFraudKeyword_ReturnsOrange() {
         val state = CallGuardState(
             callActive = true,
             upiForeground = true,
@@ -96,8 +96,8 @@ class CallGuardRiskEngineTest {
         )
         val verdict = riskEngine.evaluate(state)
 
-        assertEquals(CallGuardRiskLevel.RED, verdict.level)
-        assertTrue("Active call + UPI + Fraud keyword must trigger RED intervention", verdict.isAlertActive)
+        assertEquals("Fraud keyword during Call+UPI remains ORANGE contextual warning (NOT cloned voice)", CallGuardRiskLevel.ORANGE, verdict.level)
+        assertTrue("Alert must be active", verdict.isAlertActive)
         assertTrue(verdict.explanation.contains("Paytm"))
         assertTrue(verdict.explanation.contains("otp, बताइए"))
     }
@@ -120,7 +120,7 @@ class CallGuardRiskEngineTest {
     }
 
     @Test
-    fun testCase7_CallActive_WithUpi_WithFraudAndUrgency_ReturnsRed() {
+    fun testCase7_CallActive_WithUpi_WithFraudAndUrgency_ReturnsOrange() {
         val state = CallGuardState(
             callActive = true,
             upiForeground = true,
@@ -132,15 +132,35 @@ class CallGuardRiskEngineTest {
         )
         val verdict = riskEngine.evaluate(state)
 
-        assertEquals(CallGuardRiskLevel.RED, verdict.level)
-        assertTrue("Call + UPI + Fraud + Urgency must trigger high-confidence RED intervention", verdict.isAlertActive)
+        assertEquals("Call + UPI + Fraud + Urgency language remains elevated ORANGE warning (NOT cloned voice)", CallGuardRiskLevel.ORANGE, verdict.level)
+        assertTrue("Alert must be active", verdict.isAlertActive)
         assertTrue(verdict.explanation.contains("BHIM UPI"))
         assertTrue(verdict.explanation.contains("pin, password"))
         assertTrue(verdict.explanation.contains("arrest, police"))
     }
 
     @Test
-    fun testCase8_UnrelatedNotificationOrWindowEvent_NoAlert() {
+    fun testCase8_RealFriendSpeech_BhaiUpiKarDe_ReturnsOrange() {
+        // Friend says "bhai UPI kar de" during active phone call with PhonePe open
+        // Neither fraud credential terms nor voice clone detected
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            fraudKeywordDetected = false,
+            urgencyDetected = false,
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+
+        assertEquals("Active call + PhonePe with real friend talking naturally must remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+        assertTrue(verdict.isAlertActive)
+        assertTrue(verdict.explanation.contains("PhonePe"))
+        assertFalse("Must NOT claim cloned voice", verdict.explanation.contains("cloned", ignoreCase = true))
+    }
+
+    @Test
+    fun testCase9_UnrelatedNotificationOrWindowEvent_NoAlert() {
         // WhatsApp or social media foregrounded during active call
         val state = CallGuardState(
             callActive = true,
@@ -162,37 +182,6 @@ class CallGuardRiskEngineTest {
         val ambientVerdict = riskEngine.evaluate(ambientChatState)
         assertEquals("Ambient chat without UPI app must remain GREEN", CallGuardRiskLevel.GREEN, ambientVerdict.level)
         assertFalse("Ambient chat without UPI app must never trigger alert overlay", ambientVerdict.isAlertActive)
-    }
-
-    @Test
-    fun testCase9_DemoTrigger_ProducesDeterministicFraudSignal() {
-        // Given demo keywords triggered by operator 3x-tap
-        val demoTokens = listOf("otp", "बताइए", "jaldi")
-        val (fraud, urgency) = riskEngine.categorizeKeywords(demoTokens)
-
-        assertEquals("Demo tokens must deterministically categorize fraud keywords", 2, fraud.size)
-        assertTrue(fraud.contains("otp"))
-        assertTrue(fraud.contains("बताइए"))
-
-        assertEquals("Demo tokens must deterministically categorize urgency keywords", 1, urgency.size)
-        assertTrue(urgency.contains("jaldi"))
-
-        // When applied to Call + UPI state
-        val state = CallGuardState(
-            callActive = true,
-            upiForeground = true,
-            currentPackage = "com.phonepe.app",
-            fraudKeywordDetected = fraud.isNotEmpty(),
-            urgencyDetected = urgency.isNotEmpty(),
-            detectedFraudKeywords = fraud,
-            detectedUrgencyKeywords = urgency
-        )
-        val verdict = riskEngine.evaluate(state)
-
-        assertEquals("Demo trigger during Call+UPI must deterministically reach RED", CallGuardRiskLevel.RED, verdict.level)
-        assertTrue(verdict.isAlertActive)
-        assertTrue(verdict.explanation.contains("PhonePe"))
-        assertTrue(verdict.explanation.contains("otp, बताइए"))
     }
 
     @Test
@@ -222,10 +211,10 @@ class CallGuardRiskEngineTest {
         )
         val verdict = riskEngine.evaluate(state)
 
-        assertEquals("Call + UPI + Real VoiceID Synthetic voice must trigger RED intervention", CallGuardRiskLevel.RED, verdict.level)
+        assertEquals("Call + UPI + Confirmed Synthetic Voice must trigger RED intervention", CallGuardRiskLevel.RED, verdict.level)
         assertTrue(verdict.isAlertActive)
         assertTrue(verdict.explanation.contains("PhonePe"))
-        assertTrue(verdict.explanation.contains("Synthetic/Cloned Voice Detected"))
+        assertTrue(verdict.explanation.contains("cloned voice", ignoreCase = true))
         assertTrue(verdict.explanation.contains("94%"))
     }
 
@@ -244,7 +233,21 @@ class CallGuardRiskEngineTest {
         assertEquals("Call + UPI + Genuine voice must remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
         assertTrue(verdict.isAlertActive)
         assertTrue(verdict.explanation.contains("PhonePe"))
-        assertTrue(verdict.explanation.contains("High-risk financial context"))
+    }
+
+    @Test
+    fun testVoiceId_CallActive_WithUpi_WithUncertainVoice_ReturnsOrange() {
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            voiceCloneDetected = false,
+            voiceCloneConfidence = 0.50f
+        )
+        val verdict = riskEngine.evaluate(state)
+
+        assertEquals("Call + UPI + Uncertain voice must fail safe and remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+        assertTrue(verdict.isAlertActive)
     }
 
     @Test

@@ -123,10 +123,11 @@ class CallGuardRiskEngine(
         }
 
         // Active Call + UPI App foregrounded:
-        // VoiceID Real Inference: Call + UPI + Confirmed Synthetic Voice -> RED
+        // Critical Rule: RED is strictly reserved for confirmed high-confidence synthetic voice.
+        // Financial language, OTP keywords, and urgency are language signals, NOT proof of voice cloning.
         if (state.voiceCloneDetected) {
             val pct = (state.voiceCloneConfidence * 100).toInt()
-            val explanation = "Active call + $appName opened + Synthetic/Cloned Voice Detected (VoiceID RawNet2: $pct%)"
+            val explanation = "Possible cloned voice detected during payment call ($appName, VoiceID: $pct%)"
             return CallGuardVerdict(
                 level = CallGuardRiskLevel.RED,
                 explanation = explanation,
@@ -134,42 +135,25 @@ class CallGuardRiskEngine(
             )
         }
 
-        // Cases 5 & 7: Call + UPI + Fraud Keyword -> RED
-        if (state.fraudKeywordDetected) {
-            val fraudTerms = if (state.detectedFraudKeywords.isNotEmpty()) {
-                state.detectedFraudKeywords.joinToString(", ")
-            } else {
-                "OTP/PIN"
+        // Cases: Call + UPI (with or without keywords/urgency) -> ORANGE (Contextual Risk Warning)
+        // Genuine voice, uncertain voice, or suspicious language all remain ORANGE.
+        val explanation = when {
+            state.fraudKeywordDetected && state.urgencyDetected -> {
+                val fTerms = state.detectedFraudKeywords.joinToString(", ").ifEmpty { "OTP/PIN" }
+                val uTerms = state.detectedUrgencyKeywords.joinToString(", ").ifEmpty { "Urgency" }
+                "Payment app open ($appName) + Credential request ($fTerms) + Urgency ($uTerms) — Take a moment before transferring money"
             }
-
-            val explanation = if (state.urgencyDetected) {
-                val urgencyTerms = if (state.detectedUrgencyKeywords.isNotEmpty()) {
-                    state.detectedUrgencyKeywords.joinToString(", ")
-                } else {
-                    "Coercive urgency"
-                }
-                "Active call + $appName opened + OTP/credential request ($fraudTerms) + Urgency detected ($urgencyTerms)"
-            } else {
-                "Active call + $appName opened + OTP/credential request detected ($fraudTerms)"
+            state.fraudKeywordDetected -> {
+                val fTerms = state.detectedFraudKeywords.joinToString(", ").ifEmpty { "OTP/PIN" }
+                "Payment app open ($appName) + Credential request detected ($fTerms) — Do not share passwords or PINs"
             }
-
-            return CallGuardVerdict(
-                level = CallGuardRiskLevel.RED,
-                explanation = explanation,
-                isAlertActive = true
-            )
-        }
-
-        // Cases 4 & 6: Call + UPI (with or without urgency only) -> ORANGE
-        val explanation = if (state.urgencyDetected) {
-            val urgencyTerms = if (state.detectedUrgencyKeywords.isNotEmpty()) {
-                state.detectedUrgencyKeywords.joinToString(", ")
-            } else {
-                "Urgency pressure"
+            state.urgencyDetected -> {
+                val uTerms = state.detectedUrgencyKeywords.joinToString(", ").ifEmpty { "Urgency" }
+                "Payment app open ($appName) + Urgency detected ($uTerms) — Verify caller identity"
             }
-            "Active call + $appName opened + Urgency detected ($urgencyTerms) — Verify caller identity"
-        } else {
-            "Active call + $appName opened in foreground — High-risk financial context"
+            else -> {
+                "Active call + $appName open in foreground — High-risk financial context"
+            }
         }
 
         return CallGuardVerdict(

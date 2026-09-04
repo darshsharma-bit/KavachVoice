@@ -56,6 +56,8 @@ class KavachAccessibilityService : AccessibilityService() {
     private var telephonyManager: TelephonyManager? = null
     private var phoneStateListener: PhoneStateListener? = null
     @Volatile private var simulatedCallActive = false
+    @Volatile private var currentCallSessionId: Long = 0L
+    @Volatile private var isCallCurrentlyActive: Boolean = false
 
     private var lastWindowChangeTime = 0L
 
@@ -77,29 +79,37 @@ class KavachAccessibilityService : AccessibilityService() {
         voiceIdClient = VoiceIdClient(this)
         callGuard = CallGuardEngine(this, upiPackages).also { it.start() }
 
-        // Start Authoritative Microphone Capture (Single capture path for Layer 2)
+        // Configure Authoritative Microphone Capture (Single capture path for Layer 2)
+        // CRITICAL PRIVACY ARCHITECTURE:
+        // Microphone capture is NOT started here. It starts strictly when an active call is detected.
         keywordScanner = KeywordScanner(this) { keywords ->
             Log.d(tag, "Audio scanner reported keywords: $keywords")
             callGuard?.onKeywordsDetected(keywords)
         }.also { scanner ->
             // Connect rolling audio buffer to VoiceID FastAPI backend
-            scanner.onAudioWindowAvailable = { pcm16Window ->
-                val activeCall = isCallActive()
-                if (activeCall) {
-                    Log.i(tag, "VoiceID: Transmitting real 4.0s microphone window to backend during active call")
-                    voiceIdClient?.analyzeAudioAsync(pcm16Window) { result ->
-                        callGuard?.onVoiceIdResult(result)
+            scanner.onAudioWindowAvailableWithStats = { pcm16Window, windowNum, rms, peak, speech ->
+                val sessionId = currentCallSessionId
+                val activeCall = isCallActive() && isCallCurrentlyActive
+                if (activeCall && sessionId != 0L) {
+                    Log.i(tag, "VoiceID: Transmitting live WINDOW #$windowNum (RMS=$rms, peak=$peak, speechPresent=$speech) to backend for session #$sessionId")
+                    voiceIdClient?.analyzeAudioAsync(pcm16Window, sessionId) { result ->
+                        Log.i(tag, "VoiceID result received by AccessibilityService: sessId=${result.sessionId}, currentCallSessionId=$currentCallSessionId, isCallCurrentlyActive=$isCallCurrentlyActive, isCallActive()=${isCallActive()}")
+                        // Session validation: only deliver result if session is still active and matches
+                        if (result.sessionId == currentCallSessionId && isCallActive()) {
+                            callGuard?.onVoiceIdResult(result, windowNum = windowNum, rms = rms, peak = peak, speechPresent = speech)
+                        } else {
+                            Log.w(tag, "Discarding stale VoiceID result for expired session #${result.sessionId} (current=$currentCallSessionId, active=${isCallActive()})")
+                        }
                     }
                 }
             }
-            scanner.start()
         }
 
         // Register telephony state listener for call transitions
         setupTelephonyListener()
 
-        // Sync initial call state
-        callGuard?.onCallStateChanged(isCallActive())
+        // Sync initial call state: if phone is currently on a call, start capture; otherwise mic stays off
+        handleCallStateTransition(isCallActive())
 
         // Register testing broadcast receiver for seamless background ADB evaluation
         setupTestReceiver()
@@ -112,6 +122,32 @@ class KavachAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Authoritative Call State & Microphone Lifecycle Controller:
+     * - NO CALL -> AudioRecord OFF, mic released, buffer empty, no uploads
+     * - CALL ACTIVE -> Start AudioRecord, assign new monotonic sessionId, enable VoiceID analysis
+     * - CALL ENDS -> Immediately stop AudioRecord, release hardware mic, invalidate session, clear buffer
+     */
+    fun handleCallStateTransition(active: Boolean) {
+        synchronized(this) {
+            if (active == isCallCurrentlyActive) return
+            isCallCurrentlyActive = active
+
+            if (active) {
+                currentCallSessionId = System.currentTimeMillis()
+                Log.i(tag, "Call START detected — Initiating Session #$currentCallSessionId, starting microphone capture")
+                callGuard?.onCallSessionStarted(currentCallSessionId)
+                keywordScanner?.start()
+            } else {
+                val endedSessionId = currentCallSessionId
+                currentCallSessionId = 0L
+                Log.i(tag, "Call END detected — Terminating Session #$endedSessionId, releasing microphone capture immediately")
+                keywordScanner?.stop()
+                callGuard?.onCallSessionEnded(endedSessionId)
+            }
+        }
+    }
+
     private fun setupTelephonyListener() {
         try {
             telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
@@ -121,7 +157,7 @@ class KavachAccessibilityService : AccessibilityService() {
                     super.onCallStateChanged(state, phoneNumber)
                     val active = isCallActive()
                     Log.d(tag, "Phone state changed (rawState=$state, isCallActive=$active)")
-                    callGuard?.onCallStateChanged(active)
+                    handleCallStateTransition(active)
                 }
             }
             @Suppress("DEPRECATION")
@@ -151,7 +187,7 @@ class KavachAccessibilityService : AccessibilityService() {
 
         // Keep call state synchronized
         val activeCall = isCallActive()
-        callGuard?.onCallStateChanged(activeCall)
+        handleCallStateTransition(activeCall)
 
         // Route package transition
         if (pkg in upiPackages) {
@@ -207,7 +243,7 @@ class KavachAccessibilityService : AccessibilityService() {
                         val active = intent.getBooleanExtra("active", true)
                         simulatedCallActive = active
                         Log.i(tag, "Simulated call state update: simulatedActive=$active")
-                        callGuard?.onCallStateChanged(isCallActive())
+                        handleCallStateTransition(isCallActive())
                     }
                     "com.kavachvoice.TEST_VOICE" -> {
                         val type = intent.getStringExtra("type") ?: "mic"
@@ -223,8 +259,13 @@ class KavachAccessibilityService : AccessibilityService() {
                             "mic" -> {
                                 val window = keywordScanner?.getLatestAudioWindow()
                                 if (window != null) {
-                                    voiceIdClient?.analyzeAudioAsync(window) { result ->
-                                        callGuard?.onVoiceIdResult(result)
+                                    val sessId = currentCallSessionId
+                                    val rms = keywordScanner?.currentRms ?: 0f
+                                    val peak = keywordScanner?.currentPeak ?: 0f
+                                    val speech = keywordScanner?.isSpeechPresent ?: false
+                                    voiceIdClient?.analyzeAudioAsync(window, sessId) { result ->
+                                        Log.i(tag, "VoiceID result received by AccessibilityService (mic broadcast): sessId=${result.sessionId}, currentCallSessionId=$currentCallSessionId, isCallCurrentlyActive=$isCallCurrentlyActive, isCallActive()=${isCallActive()}")
+                                        callGuard?.onVoiceIdResult(result, windowNum = 0, rms = rms, peak = peak, speechPresent = speech)
                                     }
                                 }
                             }
@@ -280,13 +321,18 @@ class KavachAccessibilityService : AccessibilityService() {
     fun getKeywordScanner(): KeywordScanner? = keywordScanner
     fun getCallGuard(): CallGuardEngine? = callGuard
     fun getVoiceIdClient(): VoiceIdClient? = voiceIdClient
+    fun getCurrentCallSessionId(): Long = currentCallSessionId
+    fun isMicrophoneCapturing(): Boolean = keywordScanner?.isRecordingActive() ?: false
 
     /**
      * Send arbitrary audio bytes (e.g. test assets) to VoiceID backend and dispatch to CallGuard.
+     * Developer/reference asset tests explicitly use sessionId == 0L.
      */
     fun testAnalyzeAudio(wavBytes: ByteArray, onResult: ((VoiceIdResult) -> Unit)? = null) {
-        Log.i(tag, "VoiceID: Triggering test inference on ${wavBytes.size} bytes of WAV audio")
-        voiceIdClient?.analyzeWavBytesAsync(wavBytes) { result ->
+        Log.i(tag, "VoiceID: Triggering test inference on ${wavBytes.size} bytes of WAV audio (developer test sessionId=0L)")
+        val sessId = 0L // Explicit developer/reference test path
+        voiceIdClient?.analyzeWavBytesAsync(wavBytes, sessId) { result ->
+            Log.i(tag, "VoiceID result received by AccessibilityService (test asset): sessId=${result.sessionId}, currentCallSessionId=$currentCallSessionId, isCallCurrentlyActive=$isCallCurrentlyActive, isCallActive()=${isCallActive()}")
             callGuard?.onVoiceIdResult(result)
             onResult?.invoke(result)
         }

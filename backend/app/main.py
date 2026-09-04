@@ -185,6 +185,41 @@ async def analyze(file: UploadFile = File(...)):
     finally:
         tmp.unlink(missing_ok=True)
 
+    if waveform.ndim > 1:
+        waveform = waveform.mean(axis=-1)
+
+    # Speech-energy gate: evaluate RMS, peak amplitude, duration, and finite samples
+    # Prevents silence or ambient room noise from being sent to RawNet2 and classified as synthetic (91%)
+    ENERGY_RMS_THRESHOLD = 0.025
+    PEAK_THRESHOLD = 0.05
+    MIN_DURATION_S = 0.5
+
+    is_finite = bool(np.all(np.isfinite(waveform))) if len(waveform) > 0 else False
+    rms = float(np.sqrt(np.mean(waveform ** 2))) if len(waveform) > 0 else 0.0
+    peak = float(np.max(np.abs(waveform))) if len(waveform) > 0 else 0.0
+    duration_s = len(waveform) / max(sr, 1)
+
+    if not is_finite or duration_s < MIN_DURATION_S or rms < ENERGY_RMS_THRESHOLD or peak < PEAK_THRESHOLD:
+        log.info(f"Audio below acoustic energy gate (rms={rms:.5f}, peak={peak:.5f}, dur={duration_s:.2f}s) — Returning UNCERTAIN")
+        latency_ms = (time.perf_counter() - t0) * 1000
+        session_id = str(uuid.uuid4())
+        result = AnalysisResult(
+            session_id=session_id,
+            verdict="UNCERTAIN",
+            confidence=0.50,
+            calibrated_score=0.50,
+            uncertainty_sigma=0.30,
+            rawnet2_score=0.50,
+            ecapa_score=0.50,
+            rawnet2_calibrated=0.50,
+            ecapa_calibrated=0.50,
+            latency_ms=round(latency_ms, 1),
+            audio_sha256=sha256,
+        )
+        await asyncio.to_thread(_generate_pdf, result)
+        await _broadcast(result.model_dump())
+        return result
+
     # Model evaluation with graceful degradation & timeout guard
     rawnet2_ok = True
     ecapa_ok = True

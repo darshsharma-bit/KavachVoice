@@ -16,6 +16,8 @@ import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 data class VoiceIdResult(
     val isSuccess: Boolean,
     val verdict: String, // "GENUINE", "SYNTHETIC", "UNCERTAIN", "UNAVAILABLE"
@@ -24,7 +26,8 @@ data class VoiceIdResult(
     val rawnet2Score: Float = 0.0f,
     val ecapaScore: Float = 0.0f,
     val latencyMs: Float = 0.0f,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val sessionId: Long = 0L
 )
 
 /**
@@ -33,8 +36,9 @@ data class VoiceIdResult(
  * Connects the Android app to the real RawNet2 + ECAPA FastAPI backend:
  * 1. Wraps raw 16kHz PCM16 samples into a valid in-memory RIFF WAV stream.
  * 2. Transmits audio to POST /api/v1/analyze using HttpURLConnection (zero third-party deps).
- * 3. Parses genuine ML inference scores without blocking the AudioRecord capture loop.
- * 4. Fails safe (network errors yield UNAVAILABLE, never false SYNTHETIC).
+ * 3. Enforces single in-flight request guard to prevent pipeline congestion and overlapping uploads.
+ * 4. Tags each request with monotonic sessionId for session isolation.
+ * 5. Fails safe (network errors yield UNAVAILABLE, never false SYNTHETIC).
  */
 class VoiceIdClient(private val context: Context) {
 
@@ -49,6 +53,9 @@ class VoiceIdClient(private val context: Context) {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val isRequestInFlight = AtomicBoolean(false)
+
+    fun isBusy(): Boolean = isRequestInFlight.get()
 
     fun getBackendUrl(): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -62,48 +69,69 @@ class VoiceIdClient(private val context: Context) {
     }
 
     /**
-     * Check backend health asynchronously.
+     * Check backend health asynchronously with smart fallback across reverse-proxy and LAN endpoints.
      */
     fun checkHealth(onResult: (Boolean, String) -> Unit) {
         scope.launch {
-            val baseUrl = getBackendUrl()
-            try {
-                val url = URL("$baseUrl/health")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 2000
-                    readTimeout = 2000
-                    requestMethod = "GET"
-                }
+            val primaryUrl = getBackendUrl()
+            val candidateUrls = listOf(primaryUrl, FALLBACK_REVERSE_URL, DEFAULT_BACKEND_URL).distinct()
+            var lastError = "Unable to connect"
+            var connected = false
 
-                val responseCode = conn.responseCode
-                if (responseCode == 200) {
-                    val body = conn.inputStream.bufferedReader().readText()
-                    Log.i(TAG, "Backend health check OK: $body")
-                    withContext(Dispatchers.Main) { onResult(true, body) }
-                } else {
-                    withContext(Dispatchers.Main) { onResult(false, "HTTP $responseCode") }
+            for (candidate in candidateUrls) {
+                try {
+                    val url = URL("$candidate/health")
+                    val conn = (url.openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 1500
+                        readTimeout = 1500
+                        requestMethod = "GET"
+                    }
+
+                    if (conn.responseCode == 200) {
+                        val body = conn.inputStream.bufferedReader().readText()
+                        conn.disconnect()
+                        if (candidate != primaryUrl) {
+                            setBackendUrl(candidate)
+                        }
+                        connected = true
+                        Log.i(TAG, "Backend connected at $candidate: $body")
+                        withContext(Dispatchers.Main) { onResult(true, "Connected to $candidate") }
+                        break
+                    }
+                    conn.disconnect()
+                } catch (e: Exception) {
+                    lastError = "$candidate: ${e.message}"
                 }
-                conn.disconnect()
-            } catch (e: Exception) {
-                Log.w(TAG, "Backend health check failed: ${e.message}")
-                withContext(Dispatchers.Main) { onResult(false, e.message ?: "Unknown error") }
+            }
+
+            if (!connected) {
+                Log.w(TAG, "All backend candidates failed. Last error: $lastError")
+                withContext(Dispatchers.Main) { onResult(false, lastError) }
             }
         }
     }
 
     /**
      * Send a real audio window (16kHz PCM16) to the FastAPI backend for real RawNet2 + ECAPA inference.
+     * Enforces single in-flight request per session: drops overlapping windows if analysis is running.
      */
     fun analyzeAudioAsync(
         pcm16Samples: ShortArray,
+        sessionId: Long = 0L,
         onResult: (VoiceIdResult) -> Unit
     ) {
         if (pcm16Samples.isEmpty()) {
-            onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = "Empty audio buffer"))
+            onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = "Empty audio buffer", sessionId = sessionId))
             return
         }
+
+        if (isRequestInFlight.getAndSet(true)) {
+            Log.d(TAG, "VoiceID: Dropping window for session #$sessionId — previous request still in-flight")
+            return
+        }
+
         val wavBytes = pcm16ToWav(pcm16Samples)
-        analyzeWavBytesAsync(wavBytes, onResult)
+        sendWavRequestAsync(wavBytes, sessionId, onResult)
     }
 
     /**
@@ -111,18 +139,27 @@ class VoiceIdClient(private val context: Context) {
      */
     fun analyzeWavBytesAsync(
         wavBytes: ByteArray,
+        sessionId: Long = 0L,
         onResult: (VoiceIdResult) -> Unit
     ) {
         if (wavBytes.isEmpty()) {
-            onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = "Empty audio bytes"))
+            onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = "Empty audio bytes", sessionId = sessionId))
             return
         }
+        isRequestInFlight.set(true)
+        sendWavRequestAsync(wavBytes, sessionId, onResult)
+    }
 
+    private fun sendWavRequestAsync(
+        wavBytes: ByteArray,
+        sessionId: Long,
+        onResult: (VoiceIdResult) -> Unit
+    ) {
         scope.launch {
             val t0 = System.currentTimeMillis()
             val baseUrl = getBackendUrl()
 
-            Log.d(TAG, "VoiceID: REAL inference started — sending ${wavBytes.size} bytes to $baseUrl/api/v1/analyze")
+            Log.d(TAG, "VoiceID: REAL inference started for session #$sessionId — sending ${wavBytes.size} bytes to $baseUrl/api/v1/analyze")
 
             var conn: HttpURLConnection? = null
             try {
@@ -172,7 +209,7 @@ class VoiceIdClient(private val context: Context) {
                     val ecapaScore = json.optDouble("ecapa_score", 0.0).toFloat()
                     val latencyMs = json.optDouble("latency_ms", (System.currentTimeMillis() - t0).toDouble()).toFloat()
 
-                    Log.i(TAG, "VoiceID: REAL inference response: verdict=$verdict, confidence=$confidence, rawnet2=$rawnet2Score, ecapa=$ecapaScore, backendLatency=${latencyMs}ms")
+                    Log.i(TAG, "VoiceID: REAL inference response (session #$sessionId): verdict=$verdict, conf=$confidence, rawnet2=$rawnet2Score, ecapa=$ecapaScore, latency=${latencyMs}ms")
 
                     val result = VoiceIdResult(
                         isSuccess = true,
@@ -181,24 +218,26 @@ class VoiceIdClient(private val context: Context) {
                         calibratedScore = calibratedScore,
                         rawnet2Score = rawnet2Score,
                         ecapaScore = ecapaScore,
-                        latencyMs = latencyMs
+                        latencyMs = latencyMs,
+                        sessionId = sessionId
                     )
                     withContext(Dispatchers.Main) { onResult(result) }
                 } else {
                     val err = "HTTP $responseCode: ${conn.responseMessage}"
                     Log.w(TAG, "VoiceID request returned error: $err")
                     withContext(Dispatchers.Main) {
-                        onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = err))
+                        onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = err, sessionId = sessionId))
                     }
                 }
             } catch (e: Exception) {
                 val err = e.message ?: "Connection error"
                 Log.w(TAG, "VoiceID backend request failed safely: $err")
                 withContext(Dispatchers.Main) {
-                    onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = err))
+                    onResult(VoiceIdResult(false, "UNAVAILABLE", errorMessage = err, sessionId = sessionId))
                 }
             } finally {
                 conn?.disconnect()
+                isRequestInFlight.set(false)
             }
         }
     }
