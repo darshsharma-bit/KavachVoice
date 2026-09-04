@@ -4,12 +4,18 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 
 class MainActivity : Activity() {
+
+    private var tapCount = 0
+    private val tapHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -24,6 +30,18 @@ class MainActivity : Activity() {
                 data = Uri.parse("package:$packageName")
             }
             startActivity(intent)
+        }
+
+        // 3x-tap on version label triggers demo keyword mode (Moment 3 fallback)
+        findViewById<TextView>(R.id.tvVersion).setOnClickListener {
+            tapCount++
+            tapHandler.removeCallbacksAndMessages(null)
+            if (tapCount >= 3) {
+                tapCount = 0
+                triggerDemoKeywords()
+            } else {
+                tapHandler.postDelayed({ tapCount = 0 }, 1500)
+            }
         }
 
         updateStatus()
@@ -57,5 +75,20 @@ class MainActivity : Activity() {
     private fun isBatteryOptimizationDisabled(): Boolean {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun triggerDemoKeywords() {
+        val svc = KavachAccessibilityService.instance
+        if (svc != null) {
+            svc.getKeywordScanner()?.triggerDemoKeywords()
+            Toast.makeText(this, "Demo mode: keyword alert triggered", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Enable Accessibility Service first", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        tapHandler.removeCallbacksAndMessages(null)
     }
 }

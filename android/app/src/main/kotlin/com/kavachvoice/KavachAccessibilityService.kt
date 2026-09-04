@@ -9,6 +9,10 @@ import android.view.accessibility.AccessibilityEvent
 
 class KavachAccessibilityService : AccessibilityService() {
 
+    companion object {
+        @Volatile var instance: KavachAccessibilityService? = null
+    }
+
     private val tag = "KavachA11y"
 
     private val upiPackages = setOf(
@@ -28,6 +32,7 @@ class KavachAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         Log.d(tag, "KavachVoice Accessibility Service connected")
 
         serviceInfo = serviceInfo.apply {
@@ -71,6 +76,7 @@ class KavachAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         voiceArmor?.stop()
         callGuard?.stop()
         keywordScanner?.stop()
