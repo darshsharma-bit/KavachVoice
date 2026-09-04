@@ -13,7 +13,8 @@ android/app/build/
 android/local.properties
 
 # Python
-backend/__pycache__/
+__pycache__/
+**/__pycache__/
 backend/venv/
 backend/.env
 backend/*.pyc

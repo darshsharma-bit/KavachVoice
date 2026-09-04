@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center_horizontal"
+    android:background="?android:attr/colorBackground">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="KavachVoice"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginTop="32dp"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Voice Fraud Shield"
+        android:textSize="14sp"
+        android:layout_marginBottom="40dp" />
+
+    <TextView
+        android:id="@+id/tvProtectionStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="KavachVoice: CHECKING..."
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:padding="16dp"
+        android:background="#E3F2FD"
+        android:layout_marginBottom="32dp" />
+
+    <TextView
+        android:id="@+id/tvAccessibilityStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Accessibility Service: checking..."
+        android:textSize="14sp"
+        android:padding="8dp"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/btnEnableAccessibility"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Enable Accessibility Service"
+        android:layout_marginBottom="24dp" />
+
+    <TextView
+        android:id="@+id/tvBatteryStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Battery Optimization: checking..."
+        android:textSize="14sp"
+        android:padding="8dp"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/btnBatteryOpt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Disable Battery Optimization" />
+
+</LinearLayout>

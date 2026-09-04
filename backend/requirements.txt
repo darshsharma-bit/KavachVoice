@@ -1,0 +1,12 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+torch==2.4.1
+torchaudio==2.4.1
+python-multipart==0.0.12
+reportlab==4.2.2
+websockets==13.1
+aiofiles==24.1.0
+numpy==1.26.4
+scipy==1.14.1
+soundfile==0.12.1
+librosa==0.10.2

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KavachVoice</string>
+    <string name="accessibility_description">KavachVoice monitors app foreground events to detect UPI payment apps during active calls and alert you to potential voice fraud.</string>
+</resources>
