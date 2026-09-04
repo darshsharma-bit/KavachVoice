@@ -1,6 +1,19 @@
-# KavachVoice
+<p align="center">
+  <img src="docs/assets/logo.png" alt="KavachVoice APK Logo" width="128" height="128" />
+</p>
 
-Real-time acoustic AI voice cloning detection and contextual fraud interception defense system.
+<h1 align="center">KavachVoice</h1>
+
+<p align="center">
+  <em>Real-time acoustic AI voice cloning detection and contextual fraud interception defense system.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Android-API%2026%2B-3DDC84?logo=android&logoColor=white" alt="Android API 26+" />
+  <img src="https://img.shields.io/badge/FastAPI-0.100%2B-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch" />
+  <img src="https://img.shields.io/badge/Models-RawNet2%20%7C%20ECAPA--TDNN-blue" alt="Models" />
+</p>
 
 ---
 
