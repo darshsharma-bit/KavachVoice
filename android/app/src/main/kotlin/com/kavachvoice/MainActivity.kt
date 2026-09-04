@@ -40,6 +40,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var tvHeroIcon: TextView
     private lateinit var tvHeroExplanation: TextView
     private lateinit var tvCallMonitoringStatus: TextView
+    private lateinit var tvVoiceIdStatusIndicator: TextView
     private lateinit var tvMicStatus: TextView
     private lateinit var tvAccessibilityStatus: TextView
     private lateinit var tvBatteryStatus: TextView
@@ -51,6 +52,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var layoutDiagnostics: LinearLayout
     private lateinit var tvVoiceIdStatus: TextView
     private lateinit var tvVoiceIdDetails: TextView
+    private lateinit var tvDiagnosticsMetrics: TextView
 
     private var isHindi = false
     private var backendOnline = false
@@ -77,6 +79,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         tvHeroIcon = findViewById(R.id.tvHeroIcon)
         tvHeroExplanation = findViewById(R.id.tvHeroExplanation)
         tvCallMonitoringStatus = findViewById(R.id.tvCallMonitoringStatus)
+        tvVoiceIdStatusIndicator = findViewById(R.id.tvVoiceIdStatusIndicator)
         tvMicStatus = findViewById(R.id.tvMicStatus)
         tvAccessibilityStatus = findViewById(R.id.tvAccessibilityStatus)
         tvBatteryStatus = findViewById(R.id.tvBatteryStatus)
@@ -88,6 +91,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         layoutDiagnostics = findViewById(R.id.layoutDiagnostics)
         tvVoiceIdStatus = findViewById(R.id.tvVoiceIdStatus)
         tvVoiceIdDetails = findViewById(R.id.tvVoiceIdDetails)
+        tvDiagnosticsMetrics = findViewById(R.id.tvDiagnosticsMetrics)
 
         checkAndRequestPermissions()
         initLanguageOnboarding()
@@ -189,20 +193,24 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             btnLangEn.setBackgroundColor(Color.TRANSPARENT)
             btnLangEn.setTextColor(Color.parseColor("#64748B"))
 
-            findViewById<TextView>(R.id.tvAppSubtitle).text = "आवाज़ सुरक्षा शील्ड • Real-Time Voice Shield"
-            findViewById<TextView>(R.id.tvSectionProtection).text = "सुरक्षा स्थिति (PROTECTION STATUS)"
-            findViewById<TextView>(R.id.tvLabelCallMonitoring).text = "कॉल मॉनिटरिंग"
-            findViewById<TextView>(R.id.tvLabelMic).text = "माइक्रोफोन स्थिति"
+            findViewById<TextView>(R.id.tvAppTitle).text = "कवच (KAVACH)"
+            findViewById<TextView>(R.id.tvAppSubtitle).text = "आवाज़ सुरक्षा"
+            findViewById<TextView>(R.id.tvSectionProtection).text = "सिस्टम स्थिति"
+            findViewById<TextView>(R.id.tvLabelCallMonitoring).text = "कॉल सुरक्षा"
+            findViewById<TextView>(R.id.tvLabelVoiceIdStatus).text = "वॉइस आईडी"
+            findViewById<TextView>(R.id.tvLabelMic).text = "माइक्रोफोन"
         } else {
             btnLangEn.setBackgroundColor(Color.WHITE)
             btnLangEn.setTextColor(Color.parseColor("#0F172A"))
             btnLangHi.setBackgroundColor(Color.TRANSPARENT)
             btnLangHi.setTextColor(Color.parseColor("#64748B"))
 
-            findViewById<TextView>(R.id.tvAppSubtitle).text = "Voice Fraud Shield • आवाज़ सुरक्षा शील्ड"
-            findViewById<TextView>(R.id.tvSectionProtection).text = "PROTECTION STATUS"
-            findViewById<TextView>(R.id.tvLabelCallMonitoring).text = "Call Monitoring"
-            findViewById<TextView>(R.id.tvLabelMic).text = "Microphone Capture"
+            findViewById<TextView>(R.id.tvAppTitle).text = "KAVACH"
+            findViewById<TextView>(R.id.tvAppSubtitle).text = "Voice Safety"
+            findViewById<TextView>(R.id.tvSectionProtection).text = "SYSTEM STATUS"
+            findViewById<TextView>(R.id.tvLabelCallMonitoring).text = "Call Protection"
+            findViewById<TextView>(R.id.tvLabelVoiceIdStatus).text = "VoiceID"
+            findViewById<TextView>(R.id.tvLabelMic).text = "Microphone"
         }
     }
 
@@ -282,13 +290,13 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         val batteryOptDisabled = isBatteryOptimizationDisabled()
 
         tvAccessibilityStatus.text = if (accessibilityEnabled) {
-            if (isHindi) "एक्सेसिबिलिटी सेवा: सक्रिय (ACTIVE)" else "Accessibility Service: ACTIVE"
+            if (isHindi) "एक्सेसिबिलिटी सेवा: सक्रिय" else "Accessibility Service: ACTIVE"
         } else {
             if (isHindi) "एक्सेसिबिलिटी सेवा: बंद — नीचे टैप करें" else "Accessibility Service: OFF — tap below"
         }
 
         tvBatteryStatus.text = if (batteryOptDisabled) {
-            if (isHindi) "बैटरी ऑप्टिमाइज़ेशन: अप्रतिबंधित (Unrestricted)" else "Battery Optimization: DISABLED (Unrestricted)"
+            if (isHindi) "बैटरी ऑप्टिमाइज़ेशन: अप्रतिबंधित" else "Battery Optimization: DISABLED"
         } else {
             if (isHindi) "बैटरी ऑप्टिमाइज़ेशन: सीमित — नीचे टैप करें" else "Battery Optimization: ENABLED — tap below"
         }
@@ -299,38 +307,42 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         val sessionId = svc?.getCurrentCallSessionId() ?: 0L
 
         if (isCallActive) {
-            tvHeroIcon.text = "🛡️"
-            tvProtectionStatus.text = if (isHindi) "कॉल सुरक्षा सक्रिय" else "CALL MONITORING ACTIVE"
-            tvProtectionStatus.setTextColor(Color.parseColor("#15803D"))
+            tvHeroIcon.text = "●"
+            tvHeroIcon.setTextColor(Color.parseColor("#EA580C"))
+            tvProtectionStatus.text = if (isHindi) "सुरक्षा सक्रिय" else "Protection Active"
+            tvProtectionStatus.setTextColor(Color.parseColor("#C2410C"))
             tvHeroExplanation.text = if (isHindi) {
-                "कॉल का पता चला है। वॉइस सुरक्षा सक्रिय है।\nइस कॉल के लिए माइक्रोफोन मॉनिटरिंग चालू है।"
+                "कॉल का पता चला है। आवाज़ सुरक्षा सक्रिय है।"
             } else {
-                "Call detected. Voice protection is active.\nMicrophone monitoring is enabled for this call."
+                "Call detected. Real-time protection active."
             }
 
-            tvCallMonitoringStatus.text = if (isHindi) "सक्रिय (सत्र #$sessionId)" else "ACTIVE (Session #$sessionId)"
-            tvCallMonitoringStatus.setTextColor(Color.parseColor("#15803D"))
+            tvCallMonitoringStatus.text = if (isHindi) "सक्रिय (सत्र #$sessionId)" else "ON (Session #$sessionId)"
+            tvCallMonitoringStatus.setTextColor(Color.parseColor("#EA580C"))
 
-            tvMicStatus.text = if (isMicActive) {
-                if (isHindi) "चालू (स्पीकरफोन एकॉस्टिक कैप्चर)" else "ON (Speakerphone Acoustic Capture)"
-            } else {
-                if (isHindi) "प्रतीक्षारत" else "STANDBY"
-            }
+            tvVoiceIdStatusIndicator.text = "ANALYZING"
+            tvVoiceIdStatusIndicator.setTextColor(Color.parseColor("#EA580C"))
+
+            tvMicStatus.text = "ACTIVE DURING CALL"
             tvMicStatus.setTextColor(Color.parseColor("#EA580C"))
         } else {
-            tvHeroIcon.text = "🟢"
-            tvProtectionStatus.text = if (isHindi) "सुरक्षित (PROTECTED)" else "PROTECTED"
-            tvProtectionStatus.setTextColor(Color.parseColor("#1E3A8A"))
+            tvHeroIcon.text = "●"
+            tvHeroIcon.setTextColor(Color.parseColor("#16A34A"))
+            tvProtectionStatus.text = if (isHindi) "सुरक्षा सक्रिय" else "Protection Active"
+            tvProtectionStatus.setTextColor(Color.parseColor("#166534"))
             tvHeroExplanation.text = if (isHindi) {
-                "कवच वॉइस आपकी सुरक्षा कर रहा है।\nकोई कॉल सक्रिय नहीं है। माइक्रोफोन मॉनिटरिंग बंद है।"
+                "आप सुरक्षित हैं।"
             } else {
-                "KavachVoice is protecting you.\nNo active call. Microphone monitoring is OFF."
+                "You're protected."
             }
 
-            tvCallMonitoringStatus.text = if (isHindi) "निष्क्रिय — कॉल की प्रतीक्षा में" else "Idle — Waiting for active phone call"
-            tvCallMonitoringStatus.setTextColor(Color.parseColor("#64748B"))
+            tvCallMonitoringStatus.text = if (isHindi) "चालू" else "ON"
+            tvCallMonitoringStatus.setTextColor(Color.parseColor("#16A34A"))
 
-            tvMicStatus.text = if (isHindi) "बंद / OFF (गोपनीयता सुरक्षित)" else "OFF (Inactive when no call is active)"
+            tvVoiceIdStatusIndicator.text = if (backendOnline) "READY" else "STANDBY"
+            tvVoiceIdStatusIndicator.setTextColor(if (backendOnline) Color.parseColor("#16A34A") else Color.parseColor("#64748B"))
+
+            tvMicStatus.text = "OFF"
             tvMicStatus.setTextColor(Color.parseColor("#16A34A"))
         }
 
@@ -338,16 +350,22 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             val callGuard = svc.getCallGuard()
             if (callGuard != null) {
                 val status = callGuard.getLatestVoiceIdStatus()
+                val r2 = (callGuard.getLatestRawNet2Score() * 100).toInt()
+                val ec = (callGuard.getLatestEcapaScore() * 100).toInt()
+                val lat = callGuard.getLatestVoiceIdLatency().toInt()
+                val r2Str = if (r2 > 0) "$r2%" else "--"
+                val ecStr = if (ec > 0) "$ec%" else "--"
+                val latStr = if (lat > 0) "${lat}ms" else "--"
+                val sessStr = if (sessionId > 0L) "#$sessionId" else "--"
+                tvDiagnosticsMetrics.text = "RawNet2: $r2Str | ECAPA: $ecStr\nLatency: $latStr | Session ID: $sessStr"
+
                 if (isCallActive) {
                     tvVoiceIdStatus.text = "VoiceID Inference: $status (Active Call)"
                     tvVoiceIdStatus.setTextColor(Color.parseColor("#EA580C"))
-                    val r2 = (callGuard.getLatestRawNet2Score() * 100).toInt()
-                    val ec = (callGuard.getLatestEcapaScore() * 100).toInt()
-                    val lat = callGuard.getLatestVoiceIdLatency().toInt()
                     if (lat > 0) {
                         tvVoiceIdDetails.text = "RawNet2: $r2% | ECAPA: $ec% | Latency: ${lat}ms (REAL ML)"
                     } else {
-                        tvVoiceIdDetails.text = "Sampling microphone audio (4.0s rolling window)..."
+                        tvVoiceIdDetails.text = "Sampling microphone audio (2.0s rolling window, 800ms hop)..."
                     }
                 } else {
                     if (backendOnline) {
@@ -357,7 +375,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                     } else {
                         tvVoiceIdStatus.text = "VoiceID: STANDBY"
                         tvVoiceIdStatus.setTextColor(Color.parseColor("#64748B"))
-                        tvVoiceIdDetails.text = "Server: ${voiceIdClient.getBackendUrl()} — Tap 'Ping Backend' to test connection"
+                        tvVoiceIdDetails.text = "Server: ${voiceIdClient.getBackendUrl()} — Tap 'Backend Health' to test connection"
                     }
                 }
             }
@@ -395,13 +413,13 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
         val window = scanner.getLatestAudioWindow()
         if (window == null) {
-            Toast.makeText(this, "Accumulating audio... speak into microphone for 4 seconds", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Accumulating audio... speak into microphone for 2 seconds", Toast.LENGTH_SHORT).show()
             tvVoiceIdStatus.text = "VoiceID: ACCUMULATING MIC AUDIO..."
             return
         }
 
         tvVoiceIdStatus.text = "VoiceID: ANALYZING LIVE MIC..."
-        tvVoiceIdDetails.text = "Transmitting 64,000 PCM16 samples (4.0s) to RawNet2..."
+        tvVoiceIdDetails.text = "Transmitting 32,000 PCM16 samples (2.0s) to RawNet2..."
         Log.i(TAG, "VoiceID: REAL inference started for live microphone window (${window.size} samples)")
 
         voiceIdClient.analyzeAudioAsync(window, 0L) { result ->

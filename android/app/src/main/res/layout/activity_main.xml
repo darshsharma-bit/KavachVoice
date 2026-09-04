@@ -22,12 +22,14 @@
             android:layout_marginTop="8dp"
             android:layout_marginBottom="16dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🛡️"
-                android:textSize="26sp"
-                android:layout_marginEnd="10dp" />
+            <ImageView
+                android:id="@+id/ivAppLogo"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:src="@drawable/ic_kavach_logo"
+                android:contentDescription="@string/app_name"
+                android:layout_marginEnd="12dp"
+                android:scaleType="fitCenter" />
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -39,17 +41,19 @@
                     android:id="@+id/tvAppTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="KavachVoice"
-                    android:textSize="22sp"
+                    android:text="KAVACH"
+                    android:textSize="24sp"
                     android:textStyle="bold"
-                    android:textColor="#0F172A" />
+                    android:textColor="#0F172A"
+                    android:letterSpacing="0.04" />
 
                 <TextView
                     android:id="@+id/tvAppSubtitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Voice Fraud Shield • आवाज़ सुरक्षा शील्ड"
-                    android:textSize="12sp"
+                    android:text="Voice Safety"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
                     android:textColor="#64748B" />
             </LinearLayout>
 
@@ -70,10 +74,10 @@
                     android:textStyle="bold"
                     android:textColor="#0F172A"
                     android:background="#FFFFFF"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="4dp" />
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="5dp"
+                    android:paddingBottom="5dp" />
 
                 <TextView
                     android:id="@+id/btnLangHi"
@@ -83,10 +87,10 @@
                     android:textSize="11sp"
                     android:textStyle="bold"
                     android:textColor="#64748B"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="4dp" />
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="5dp"
+                    android:paddingBottom="5dp" />
             </LinearLayout>
         </LinearLayout>
 
@@ -97,7 +101,7 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:background="#EFF6FF"
-            android:padding="16dp"
+            android:padding="18dp"
             android:layout_marginBottom="16dp">
 
             <LinearLayout
@@ -105,14 +109,15 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="8dp">
 
                 <TextView
                     android:id="@+id/tvHeroIcon"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🟢"
-                    android:textSize="18sp"
+                    android:text="●"
+                    android:textColor="#16A34A"
+                    android:textSize="20sp"
                     android:layout_marginEnd="8dp" />
 
                 <TextView
@@ -120,23 +125,23 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="PROTECTED"
-                    android:textSize="17sp"
+                    android:text="Protection Active"
+                    android:textSize="18sp"
                     android:textStyle="bold"
-                    android:textColor="#1E3A8A" />
+                    android:textColor="#166534" />
             </LinearLayout>
 
             <TextView
                 android:id="@+id/tvHeroExplanation"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="KavachVoice is ready. No active call.\nMicrophone monitoring is OFF."
-                android:textSize="13sp"
+                android:text="You're protected."
+                android:textSize="14sp"
                 android:textColor="#334155"
                 android:lineSpacingExtra="2dp" />
         </LinearLayout>
 
-        <!-- Protection Status Overview -->
+        <!-- Protection Status Overview: 3 Clean Indicators -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -149,26 +154,26 @@
                 android:id="@+id/tvSectionProtection"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="PROTECTION STATUS"
+                android:text="SYSTEM STATUS"
                 android:textSize="11sp"
                 android:textStyle="bold"
                 android:textColor="#94A3B8"
-                android:layout_marginBottom="12dp" />
+                android:layout_marginBottom="14dp" />
 
-            <!-- Status 1: Call Monitoring -->
+            <!-- Status 1: Call Protection -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="10dp">
+                android:layout_marginBottom="12dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="📞"
-                    android:textSize="16sp"
-                    android:layout_marginEnd="10dp" />
+                    android:textSize="18sp"
+                    android:layout_marginEnd="12dp" />
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -180,7 +185,7 @@
                         android:id="@+id/tvLabelCallMonitoring"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Call Monitoring"
+                        android:text="Call Protection"
                         android:textSize="13sp"
                         android:textStyle="bold"
                         android:textColor="#1E293B" />
@@ -189,13 +194,55 @@
                         android:id="@+id/tvCallMonitoringStatus"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Idle — Waiting for active phone call"
-                        android:textSize="11sp"
-                        android:textColor="#64748B" />
+                        android:text="ON"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#16A34A" />
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- Status 2: Microphone Privacy -->
+            <!-- Status 2: VoiceID -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🧠"
+                    android:textSize="18sp"
+                    android:layout_marginEnd="12dp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/tvLabelVoiceIdStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="VoiceID"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:textColor="#1E293B" />
+
+                    <TextView
+                        android:id="@+id/tvVoiceIdStatusIndicator"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="READY"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#16A34A" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Status 3: Microphone Privacy -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -207,8 +254,8 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="🎙️"
-                    android:textSize="16sp"
-                    android:layout_marginEnd="10dp" />
+                    android:textSize="18sp"
+                    android:layout_marginEnd="12dp" />
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -220,7 +267,7 @@
                         android:id="@+id/tvLabelMic"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Microphone Capture"
+                        android:text="Microphone"
                         android:textSize="13sp"
                         android:textStyle="bold"
                         android:textColor="#1E293B" />
@@ -229,19 +276,38 @@
                         android:id="@+id/tvMicStatus"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="OFF (Inactive when no call is active)"
-                        android:textSize="11sp"
+                        android:text="OFF"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
                         android:textColor="#16A34A" />
                 </LinearLayout>
             </LinearLayout>
+        </LinearLayout>
+        <!-- System Permissions & Optimization -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#FFFFFF"
+            android:padding="16dp"
+            android:layout_marginBottom="16dp">
 
-            <!-- Status 3: Accessibility Service -->
+            <TextView
+                android:id="@+id/tvSectionPermissions"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="SYSTEM INTEGRATION"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="#94A3B8"
+                android:layout_marginBottom="10dp" />
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="8dp">
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -269,18 +335,17 @@
                         android:id="@+id/tvBatteryStatus"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Battery Optimization: DISABLED (Unrestricted)"
+                        android:text="Battery Optimization: DISABLED"
                         android:textSize="11sp"
                         android:textColor="#64748B" />
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- Action buttons for setup if needed -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginTop="8dp">
+                android:layout_marginTop="6dp">
 
                 <Button
                     android:id="@+id/btnEnableAccessibility"
@@ -380,7 +445,35 @@
                     android:textColor="#64748B"
                     android:layout_marginBottom="8dp" />
 
-                <!-- Action Buttons: Backend Ping & Mic Analysis -->
+                <!-- Live Real-Time Diagnostics Display -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="#F8FAFC"
+                    android:padding="10dp"
+                    android:layout_marginBottom="10dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="REAL-TIME INFERENCE TELEMETRY"
+                        android:textSize="10sp"
+                        android:textStyle="bold"
+                        android:textColor="#64748B"
+                        android:layout_marginBottom="4dp" />
+
+                    <TextView
+                        android:id="@+id/tvDiagnosticsMetrics"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="RawNet2: -- | ECAPA: --\nLatency: -- | Session ID: --"
+                        android:textSize="11sp"
+                        android:textColor="#0F172A"
+                        android:lineSpacingExtra="2dp" />
+                </LinearLayout>
+
+                <!-- Action Buttons: Backend Health & Live Voice Analysis -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -392,7 +485,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Ping Backend"
+                        android:text="Backend Health"
                         android:textSize="11sp"
                         android:layout_marginEnd="4dp" />
 
@@ -401,12 +494,12 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Analyze Live Mic"
+                        android:text="Live Voice Analysis"
                         android:textSize="11sp"
                         android:layout_marginStart="4dp" />
                 </LinearLayout>
 
-                <!-- Action Buttons: Test Assets -->
+                <!-- Action Buttons: Genuine Test & Synthetic Test -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -418,8 +511,8 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Test Genuine (WAV)"
-                        android:textSize="10sp"
+                        android:text="Genuine Test"
+                        android:textSize="11sp"
                         android:layout_marginEnd="4dp" />
 
                     <Button
@@ -427,8 +520,8 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Test Clone (WAV)"
-                        android:textSize="10sp"
+                        android:text="Synthetic Test"
+                        android:textSize="11sp"
                         android:layout_marginStart="4dp" />
                 </LinearLayout>
 

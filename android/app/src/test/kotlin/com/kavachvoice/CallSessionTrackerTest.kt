@@ -156,6 +156,161 @@ class CallSessionTrackerTest {
         tracker.processVoiceIdResult(res2)
 
         assertFalse("UNCERTAIN must never confirm synthetic", tracker.isSyntheticConfirmed)
+        assertEquals("UNCERTAIN does not increase candidate count (stays 1)", 1, tracker.candidateSyntheticCount)
+    }
+
+    @Test
+    fun testUnavailableResultFailsSafeWithoutConfirming() {
+        tracker.startSession(200L)
+
+        // Window 1: candidate synthetic
+        val res1 = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.88f, sessionId = 200L)
+        tracker.processVoiceIdResult(res1)
+        assertEquals(1, tracker.candidateSyntheticCount)
+
+        // Window 2: network error or backend failure -> UNAVAILABLE
+        val res2 = VoiceIdResult(isSuccess = false, verdict = "UNAVAILABLE", confidence = 0.0f, sessionId = 200L)
+        val accepted = tracker.processVoiceIdResult(res2)
+
+        assertTrue(accepted)
+        assertFalse("UNAVAILABLE must never confirm synthetic", tracker.isSyntheticConfirmed)
+        assertEquals("UNAVAILABLE does not increase candidate count (stays 1)", 1, tracker.candidateSyntheticCount)
+    }
+
+    @Test
+    fun testSessionTransitionInvalidatesOldResults() {
+        // Session 301 starts
+        tracker.startSession(301L)
+        assertEquals(301L, tracker.activeSessionId)
+
+        // Session 301 ends
+        tracker.endSession(301L)
+        assertEquals(0L, tracker.activeSessionId)
+        assertFalse(tracker.isCallActive)
+
+        // Session 302 starts
+        tracker.startSession(302L)
+        assertEquals(302L, tracker.activeSessionId)
+
+        // Result from session 301 arrives during session 302
+        val oldRes = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.95f, sessionId = 301L)
+        val accepted = tracker.processVoiceIdResult(oldRes)
+
+        assertFalse("Old session result must be rejected during session transition", accepted)
+        assertFalse("Old session result must not confirm synthetic in new session", tracker.isSyntheticConfirmed)
+        assertEquals(0, tracker.candidateSyntheticCount)
+    }
+
+    // =========================================================================
+    // SECTION 5 ADVERSARIAL SESSION RACE CONDITION TESTS
+    // =========================================================================
+
+    @Test
+    fun testAdversarialCase1_CallA_SyntheticWin1_CallEnds_OldResultArrives() {
+        tracker.startSession(601L)
+        val win1 = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.88f, sessionId = 601L)
+        tracker.processVoiceIdResult(win1)
+        assertEquals(1, tracker.candidateSyntheticCount)
+
+        // Call A ends
+        tracker.endSession(601L)
+        assertFalse(tracker.isCallActive)
+
+        // Old synthetic result from Call A arrives after termination
+        val delayedOldResult = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.92f, sessionId = 601L)
+        val accepted = tracker.processVoiceIdResult(delayedOldResult)
+
+        assertFalse("Result after call end must be discarded", accepted)
+        assertFalse("Cannot confirm synthetic after call termination", tracker.isSyntheticConfirmed)
+        assertEquals(0, tracker.candidateSyntheticCount)
+    }
+
+    @Test
+    fun testAdversarialCase2_CallA_InferenceRunning_CallAEnds_CallBBegins_CallAResultArrives() {
+        tracker.startSession(701L)
+        // Call A ends before inference finishes
+        tracker.endSession(701L)
+
+        // Call B begins
+        tracker.startSession(702L)
+
+        // Call A delayed result arrives
+        val callAResult = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.99f, sessionId = 701L)
+        val accepted = tracker.processVoiceIdResult(callAResult)
+
+        assertFalse("Mismatched session result from previous call must be discarded", accepted)
+        assertFalse("Call A result must not confirm Call B", tracker.isSyntheticConfirmed)
+        assertEquals(0, tracker.candidateSyntheticCount)
+    }
+
+    @Test
+    fun testAdversarialCase3_CallA_Candidate1_CallEnds_CallBBegins_CandidateIsZero() {
+        tracker.startSession(801L)
+        val win1 = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.88f, sessionId = 801L)
+        tracker.processVoiceIdResult(win1)
+        assertEquals(1, tracker.candidateSyntheticCount)
+
+        // Call A ends
+        tracker.endSession(801L)
+        assertEquals(0, tracker.candidateSyntheticCount)
+
+        // Call B begins
+        tracker.startSession(802L)
+        assertEquals("New call session must start with candidate count 0", 0, tracker.candidateSyntheticCount)
+        assertFalse(tracker.isSyntheticConfirmed)
+    }
+
+    @Test
+    fun testAdversarialCase4_CallA_RedConfirmed_CallEnds_RedClearedImmediately() {
+        tracker.startSession(901L)
+        val win1 = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.88f, sessionId = 901L)
+        tracker.processVoiceIdResult(win1)
+        val win2 = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.91f, sessionId = 901L)
+        tracker.processVoiceIdResult(win2)
+        assertTrue("Synthetic must be confirmed", tracker.isSyntheticConfirmed)
+
+        // Call ends
+        tracker.endSession(901L)
+        assertFalse("RED state must be cleared immediately upon call end", tracker.isSyntheticConfirmed)
+        assertEquals(0, tracker.candidateSyntheticCount)
+        assertEquals(0.0f, tracker.confirmedConfidence, 0.0001f)
+    }
+
+    @Test
+    fun testAdversarialCase5_CallA_Candidate1_GenuineSpeech_Synthetic_FirstReset() {
+        tracker.startSession(1001L)
+        // Synthetic 1
+        val syn1 = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.88f, sessionId = 1001L)
+        tracker.processVoiceIdResult(syn1)
+        assertEquals(1, tracker.candidateSyntheticCount)
+
+        // Genuine speech arrives
+        val genuine = VoiceIdResult(isSuccess = true, verdict = "GENUINE", confidence = 0.05f, sessionId = 1001L)
+        tracker.processVoiceIdResult(genuine)
+        assertEquals("Genuine speech must reset candidate count to 0", 0, tracker.candidateSyntheticCount)
+        assertFalse(tracker.isSyntheticConfirmed)
+
+        // Subsequent synthetic arrives -> starts fresh sequence from 1
+        val syn2 = VoiceIdResult(isSuccess = true, verdict = "SYNTHETIC", confidence = 0.89f, sessionId = 1001L)
+        tracker.processVoiceIdResult(syn2)
+        assertEquals("New synthetic sequence starts from 1, NOT 2", 1, tracker.candidateSyntheticCount)
+        assertFalse("Single synthetic after genuine reset must NOT confirm RED", tracker.isSyntheticConfirmed)
+    }
+
+    @Test
+    fun testAdversarialCase6_BackendUnavailable_BackendReturns_GenuineSpeech_NoAccidentalRed() {
+        tracker.startSession(1101L)
+
+        // Backend unavailable
+        val unavail = VoiceIdResult(isSuccess = false, verdict = "UNAVAILABLE", confidence = 0.0f, sessionId = 1101L)
+        tracker.processVoiceIdResult(unavail)
+        assertFalse(tracker.isSyntheticConfirmed)
+        assertEquals(0, tracker.candidateSyntheticCount)
+
+        // Backend returns and reports genuine human voice
+        val genuine = VoiceIdResult(isSuccess = true, verdict = "GENUINE", confidence = 0.08f, sessionId = 1101L)
+        tracker.processVoiceIdResult(genuine)
+        assertFalse("Backend recovery with genuine voice must remain safe", tracker.isSyntheticConfirmed)
         assertEquals(0, tracker.candidateSyntheticCount)
     }
 
@@ -341,5 +496,36 @@ class CallSessionTrackerTest {
         val verdict = riskEngine.evaluate(state)
         assertEquals(CallGuardRiskLevel.GREEN, verdict.level)
         assertFalse(verdict.isAlertActive)
+    }
+
+    @Test
+    fun testLiveSessionCannotUseReferenceBypass_EvenWithHighConfidence() {
+        tracker.startSession(5001L)
+
+        // Window 1: extremely high confidence live result (0.999f)
+        val highConfLiveResult = VoiceIdResult(
+            isSuccess = true,
+            verdict = "SYNTHETIC",
+            confidence = 0.999f,
+            rawnet2Score = 0.999f,
+            sessionId = 5001L
+        )
+        val accepted = tracker.processVoiceIdResult(highConfLiveResult)
+
+        assertTrue(accepted)
+        assertEquals("Live audio must increment candidate to 1", 1, tracker.candidateSyntheticCount)
+        assertFalse("Live audio must NEVER bypass temporal confirmation on window 1, even with 0.999 confidence", tracker.isSyntheticConfirmed)
+
+        // Window 2 confirms
+        val win2 = VoiceIdResult(
+            isSuccess = true,
+            verdict = "SYNTHETIC",
+            confidence = 0.985f,
+            rawnet2Score = 0.985f,
+            sessionId = 5001L
+        )
+        tracker.processVoiceIdResult(win2)
+        assertEquals(2, tracker.candidateSyntheticCount)
+        assertTrue("Two consecutive windows confirm synthetic", tracker.isSyntheticConfirmed)
     }
 }

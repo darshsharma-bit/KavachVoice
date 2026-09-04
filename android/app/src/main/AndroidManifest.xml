@@ -15,6 +15,8 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="KavachVoice"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.KavachVoice">

@@ -87,16 +87,25 @@ class KavachAccessibilityService : AccessibilityService() {
             callGuard?.onKeywordsDetected(keywords)
         }.also { scanner ->
             // Connect rolling audio buffer to VoiceID FastAPI backend
-            scanner.onAudioWindowAvailableWithStats = { pcm16Window, windowNum, rms, peak, speech ->
+            scanner.onAudioWindowAvailableWithStats = { pcm16Window, windowNum, rms, peak, speech, durMs, sampleCount ->
                 val sessionId = currentCallSessionId
                 val activeCall = isCallActive() && isCallCurrentlyActive
                 if (activeCall && sessionId != 0L) {
-                    Log.i(tag, "VoiceID: Transmitting live WINDOW #$windowNum (RMS=$rms, peak=$peak, speechPresent=$speech) to backend for session #$sessionId")
+                    val ts = System.currentTimeMillis()
+                    Log.i(tag, "VoiceID: Transmitting live WINDOW #$windowNum (samples=$sampleCount, dur=${durMs}ms, RMS=$rms, peak=$peak, speechPresent=$speech, ts=$ts) to backend for session #$sessionId")
                     voiceIdClient?.analyzeAudioAsync(pcm16Window, sessionId) { result ->
                         Log.i(tag, "VoiceID result received by AccessibilityService: sessId=${result.sessionId}, currentCallSessionId=$currentCallSessionId, isCallCurrentlyActive=$isCallCurrentlyActive, isCallActive()=${isCallActive()}")
                         // Session validation: only deliver result if session is still active and matches
                         if (result.sessionId == currentCallSessionId && isCallActive()) {
-                            callGuard?.onVoiceIdResult(result, windowNum = windowNum, rms = rms, peak = peak, speechPresent = speech)
+                            callGuard?.onVoiceIdResult(
+                                result,
+                                windowNum = windowNum,
+                                rms = rms,
+                                peak = peak,
+                                speechPresent = speech,
+                                durationMs = durMs,
+                                sampleCount = sampleCount
+                            )
                         } else {
                             Log.w(tag, "Discarding stale VoiceID result for expired session #${result.sessionId} (current=$currentCallSessionId, active=${isCallActive()})")
                         }
@@ -265,7 +274,15 @@ class KavachAccessibilityService : AccessibilityService() {
                                     val speech = keywordScanner?.isSpeechPresent ?: false
                                     voiceIdClient?.analyzeAudioAsync(window, sessId) { result ->
                                         Log.i(tag, "VoiceID result received by AccessibilityService (mic broadcast): sessId=${result.sessionId}, currentCallSessionId=$currentCallSessionId, isCallCurrentlyActive=$isCallCurrentlyActive, isCallActive()=${isCallActive()}")
-                                        callGuard?.onVoiceIdResult(result, windowNum = 0, rms = rms, peak = peak, speechPresent = speech)
+                                        callGuard?.onVoiceIdResult(
+                                            result,
+                                            windowNum = 0,
+                                            rms = rms,
+                                            peak = peak,
+                                            speechPresent = speech,
+                                            durationMs = KeywordScanner.LIVE_WINDOW_MS,
+                                            sampleCount = window.size
+                                        )
                                     }
                                 }
                             }

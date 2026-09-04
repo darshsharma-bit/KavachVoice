@@ -28,9 +28,16 @@ import java.util.Locale
  * - no call + UPI                -> GREEN (Benign payment)
  * - call + no UPI                -> GREEN / MONITORING (Ambient observation)
  * - call + UPI                   -> ORANGE (Elevated risk context)
- * - call + UPI + fraud signal    -> RED (Direct scam intervention)
+ * - call + UPI + fraud signal    -> ORANGE
+ *   (Credential warning; keywords alone never trigger RED)
+ *
  * - call + UPI + urgency only    -> ORANGE (Elevated risk context)
- * - call + UPI + fraud + urgency -> RED (High-confidence scam intervention)
+ *
+ * - call + UPI + fraud + urgency -> ORANGE
+ *   (Urgent credential warning; keywords alone never trigger RED)
+ *
+ * - call + UPI + confirmed clone -> RED
+ *   (High-confidence synthetic-voice intervention)
  *
  * Hardened RED intervention:
  * - High-visibility crimson warning banner with real explainable signals
@@ -188,13 +195,18 @@ class CallGuardEngine(
         windowNum: Int? = null,
         rms: Float? = null,
         peak: Float? = null,
-        speechPresent: Boolean? = null
+        speechPresent: Boolean? = null,
+        durationMs: Int? = null,
+        sampleCount: Int? = null
     ) {
         val countBefore = sessionTracker.candidateSyntheticCount
         Log.i(TAG, "VoiceID result received by CallGuard (session #${result.sessionId}): verdict=${result.verdict}, conf=${result.confidence}, rawnet2=${result.rawnet2Score}, ecapa=${result.ecapaScore}, latency=${result.latencyMs}ms, candidateSyntheticCount BEFORE=$countBefore")
+        
+        val state: CallGuardState
+        val countAfter: Int
         synchronized(this) {
             val accepted = sessionTracker.processVoiceIdResult(result)
-            val countAfter = sessionTracker.candidateSyntheticCount
+            countAfter = sessionTracker.candidateSyntheticCount
             Log.i(TAG, "CallSessionTracker processed result: accepted=$accepted, candidateSyntheticCount AFTER=$countAfter, isSyntheticConfirmed=${sessionTracker.isSyntheticConfirmed}")
             if (!accepted) {
                 Log.w(TAG, "Dropping VoiceID result for session #${result.sessionId} (active=#${sessionTracker.activeSessionId}, callActive=${sessionTracker.isCallActive})")
@@ -210,15 +222,39 @@ class CallGuardEngine(
             voiceCloneConfidence = sessionTracker.confirmedConfidence
             Log.i(TAG, "CallGuard state updated: voiceCloneDetected=$voiceCloneDetected, voiceCloneConfidence=$voiceCloneConfidence")
 
-            val winLabel = windowNum?.let { "WINDOW #$it" } ?: if (result.sessionId == 0L) "DEV_ASSET" else "LIVE_AUDIO"
-            Log.i(TAG, "$winLabel: RMS=${rms ?: "N/A"}, peak=${peak ?: "N/A"}, speechPresent=${speechPresent ?: "N/A"}, RawNet2=${result.rawnet2Score}, ECAPA=${result.ecapaScore}, verdict=${result.verdict}, confidence=${result.confidence}, sessionId=${result.sessionId}, candidateSyntheticCount=$countAfter, confirmedSynthetic=${sessionTracker.isSyntheticConfirmed}")
-
             if (voiceCloneDetected) {
                 Log.w(TAG, "VoiceID: Confirmed SYNTHETIC voice (windows=${sessionTracker.candidateSyntheticCount}, RawNet2=${result.rawnet2Score}, conf=${result.confidence})")
             } else if (result.verdict == "SYNTHETIC") {
                 Log.i(TAG, "VoiceID: Candidate synthetic window 1/2 noted — waiting for temporal confirmation")
             }
+
+            state = CallGuardState(
+                callActive = callActive,
+                upiForeground = upiForeground,
+                currentPackage = currentUpiPackage,
+                fraudKeywordDetected = fraudKeywordDetected,
+                urgencyDetected = urgencyDetected,
+                detectedFraudKeywords = detectedFraudList.toList(),
+                detectedUrgencyKeywords = detectedUrgencyList.toList(),
+                voiceCloneDetected = voiceCloneDetected,
+                voiceCloneConfidence = voiceCloneConfidence,
+            )
         }
+
+        val verdict = riskEngine.evaluate(state)
+
+        // Phase 2: Professional live diagnostics log for every dispatched window
+        val seqStr = windowNum?.toString() ?: if (result.sessionId == 0L) "DEV_ASSET" else "MANUAL"
+        val durStr = durationMs?.let { "${it}ms" } ?: "N/A"
+        val samplesStr = sampleCount?.toString() ?: "N/A"
+        val rmsStr = rms?.let { String.format(java.util.Locale.US, "%.5f", it) } ?: "N/A"
+        val peakStr = peak?.let { String.format(java.util.Locale.US, "%.5f", it) } ?: "N/A"
+        val speechStr = speechPresent?.toString() ?: "N/A"
+        val captureStateStr = if (state.callActive) "RECORDSTATE_RECORDING" else "RECORDSTATE_STOPPED"
+        val tsStr = System.currentTimeMillis().toString()
+
+        Log.i(TAG, "LIVE DIAGNOSTICS [Window #$seqStr]: sessionId=${result.sessionId}, seq=$seqStr, samples=$samplesStr, dur=$durStr, RMS=$rmsStr, peak=$peakStr, speechPresent=$speechStr, captureState=$captureStateStr, ts=$tsStr, latency=${result.latencyMs}ms, RawNet2=${result.rawnet2Score}, ECAPA=${result.ecapaScore}, verdict=${result.verdict}, conf=${result.confidence}, candidateCount=$countAfter, isConfirmed=${sessionTracker.isSyntheticConfirmed}, callActive=${state.callActive}, upiForeground=${state.upiForeground}, finalVerdict=${verdict.level}")
+
         evaluateAndApply()
     }
 
@@ -335,7 +371,7 @@ class CallGuardEngine(
 
             // If already displaying the identical level, update explanation without destroying the countdown
             if (overlayContainer != null && currentLevel == verdict.level) {
-                explanationTextView?.text = verdict.explanation
+                updateTechnicalDetailsText(verdict.explanation)
                 return@post
             }
 
@@ -374,7 +410,7 @@ class CallGuardEngine(
         if (isRed && ttsReady && tts != null) {
             try {
                 tts?.speak(
-                    "सावधान! संभावित नकली आवाज़ का पता चला है। पैसे ट्रांसफर न करें।",
+                    "सावधान! संभावित क्लोन की गई आवाज़ का पता चला है। पैसे ट्रांसफर न करें।",
                     TextToSpeech.QUEUE_FLUSH,
                     null,
                     "kavach_fraud_alert"
@@ -432,7 +468,7 @@ class CallGuardEngine(
         }
 
         val titleView = TextView(context).apply {
-            text = if (isRed) "CRITICAL SECURITY ALERT" else "CALL SAFETY WARNING"
+            text = if (isRed) "POTENTIAL CLONED VOICE DETECTED" else "PAYMENT ACTIVITY DURING CALL"
             setTextColor(Color.WHITE)
             textSize = 15f
             setTypeface(typeface, Typeface.BOLD)
@@ -440,7 +476,7 @@ class CallGuardEngine(
         }
 
         val badge = TextView(context).apply {
-            text = "KavachVoice"
+            text = "Kavach"
             setTextColor(Color.parseColor("#CCFFFFFF"))
             textSize = 10f
             setTypeface(typeface, Typeface.BOLD)
@@ -456,32 +492,46 @@ class CallGuardEngine(
         // Clean English Block
         val englishBody = TextView(context).apply {
             text = if (isRed) {
-                "Possible cloned voice detected.\nDo not transfer money. Do not share OTP, PIN or passwords."
+                "Do not send money or share OTPs.\nVerify the caller using another trusted channel."
             } else {
-                "You are on a call and a payment app is open.\nTake a moment before transferring money."
+                "You're on a call while a payment app is open.\nVerify the recipient before sending money."
             }
             setTextColor(Color.WHITE)
             textSize = 13f
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also {
-                it.topMargin = (8 * dp).toInt()
+                it.topMargin = (6 * dp).toInt()
             }
         }
         content.addView(englishBody)
 
-        // Clean Hindi Block (strictly separated, zero Hinglish)
-        val hindiBody = TextView(context).apply {
-            text = if (isRed) {
-                "संभावित नकली आवाज़ का पता चला है।\nपैसे ट्रांसफर न करें। OTP, PIN या पासवर्ड साझा न करें।"
-            } else {
-                "आप कॉल पर हैं और एक भुगतान ऐप खुला है।\nपैसे ट्रांसफर करने से पहले सावधानी से जांच करें।"
-            }
-            setTextColor(Color.parseColor("#FFF9C4")) // Soft light yellow for clear reading
-            textSize = 12f
+        // Clean Hindi Block (strictly separated, zero English mixed in sentence)
+        val hindiBlock = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also {
-                it.topMargin = (6 * dp).toInt()
+                it.topMargin = (8 * dp).toInt()
             }
         }
-        content.addView(hindiBody)
+        val hindiTitle = TextView(context).apply {
+            text = if (isRed) "संभावित क्लोन की गई आवाज़ का पता चला है" else "कॉल के दौरान भुगतान गतिविधि"
+            setTextColor(Color.parseColor("#FFF9C4"))
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+        }
+        val hindiBody = TextView(context).apply {
+            text = if (isRed) {
+                "पैसे न भेजें और OTP साझा न करें।\nकॉलर की पहचान किसी दूसरे विश्वसनीय माध्यम से सत्यापित करें।"
+            } else {
+                "आप कॉल पर हैं और भुगतान ऐप खुला है।\nपैसे भेजने से पहले प्राप्तकर्ता की पुष्टि करें।"
+            }
+            setTextColor(Color.parseColor("#FFF9C4"))
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also {
+                it.topMargin = (2 * dp).toInt()
+            }
+        }
+        hindiBlock.addView(hindiTitle)
+        hindiBlock.addView(hindiBody)
+        content.addView(hindiBlock)
 
         // Hidden Technical Details section (Collapsible)
         val detailsContainer = LinearLayout(context).apply {
@@ -493,11 +543,13 @@ class CallGuardEngine(
         }
 
         val technicalDetails = TextView(context).apply {
-            val r2 = (latestRawNet2Score * 100).toInt()
-            val ec = (latestEcapaScore * 100).toInt()
+            val r2 = String.format(java.util.Locale.US, "%.1f%%", latestRawNet2Score * 100)
+            val ec = String.format(java.util.Locale.US, "%.1f%%", latestEcapaScore * 100)
+            val conf = String.format(java.util.Locale.US, "%.1f%%", voiceCloneConfidence * 100)
             val lat = latestVoiceIdLatency.toInt()
             val sessId = sessionTracker.activeSessionId
-            text = "Diagnostics: Session #$sessId | RawNet2: $r2% | ECAPA: $ec% | Latency: ${lat}ms\nExplanation: ${verdict.explanation}"
+            val count = sessionTracker.candidateSyntheticCount
+            text = "RawNet2: $r2\nECAPA: $ec\nConfidence: $conf\nEvidence windows: $count confirmed\nLatency: ${lat}ms\nSession: #$sessId"
             setTextColor(Color.parseColor("#CFD8DC"))
             textSize = 10f
         }
@@ -507,17 +559,17 @@ class CallGuardEngine(
 
         // Details toggle button
         val detailsToggle = TextView(context).apply {
-            text = "▶ Technical Details / तकनीकी विवरण"
+            text = "Technical details ▼"
             setTextColor(Color.parseColor("#B0BEC5"))
-            textSize = 10f
+            textSize = 11f
             setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt())
             setOnClickListener {
                 if (detailsContainer.visibility == View.VISIBLE) {
                     detailsContainer.visibility = View.GONE
-                    text = "▶ Technical Details / तकनीकी विवरण"
+                    text = "Technical details ▼"
                 } else {
                     detailsContainer.visibility = View.VISIBLE
-                    text = "▼ Hide Details / विवरण छिपाएं"
+                    text = "Technical details ▲"
                 }
             }
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also {
@@ -535,9 +587,9 @@ class CallGuardEngine(
             }
         }
 
-        // Action 1: 📞 1930 Cyber Helpline
+        // Action 1: Call 1930 Cyber Helpline
         val helplineBtn = TextView(context).apply {
-            text = "📞 Call 1930"
+            text = "Call 1930"
             setTextColor(Color.WHITE)
             textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
@@ -560,7 +612,7 @@ class CallGuardEngine(
         }
         buttonRow.addView(helplineBtn)
 
-        // Action 2: Dismiss Button with safety countdown on RED
+        // Action 2: Dismiss Button
         val dismissBtn = TextView(context).apply {
             textSize = 12f
             setBackgroundColor(Color.parseColor("#33FFFFFF"))
@@ -573,24 +625,24 @@ class CallGuardEngine(
         if (isRed) {
             dismissBtn.isEnabled = false
             dismissBtn.alpha = 0.5f
-            dismissBtn.text = "⏳ Hold: 10s"
+            dismissBtn.text = "Dismiss (10s)"
 
             countdownTimer?.cancel()
             countdownTimer = object : CountDownTimer(10_000L, 1000L) {
                 override fun onTick(millisUntilFinished: Long) {
                     val secondsLeft = (millisUntilFinished / 1000) + 1
-                    dismissBtn.text = "⏳ Hold: ${secondsLeft}s"
+                    dismissBtn.text = "Dismiss (${secondsLeft}s)"
                 }
 
                 override fun onFinish() {
                     dismissBtn.isEnabled = true
                     dismissBtn.alpha = 1.0f
-                    dismissBtn.text = "✕ Dismiss / बंद करें"
+                    dismissBtn.text = "Dismiss"
                 }
             }.start()
         } else {
             dismissBtn.isEnabled = true
-            dismissBtn.text = "✕ Dismiss / बंद करें"
+            dismissBtn.text = "Dismiss"
         }
 
         buttonRow.addView(dismissBtn)
@@ -614,8 +666,19 @@ class CallGuardEngine(
         explanationTextView = null
     }
 
+    private fun updateTechnicalDetailsText(explanation: String? = null) {
+        val r2 = String.format(java.util.Locale.US, "%.1f%%", latestRawNet2Score * 100)
+        val ec = String.format(java.util.Locale.US, "%.1f%%", latestEcapaScore * 100)
+        val conf = String.format(java.util.Locale.US, "%.1f%%", voiceCloneConfidence * 100)
+        val lat = latestVoiceIdLatency.toInt()
+        val sessId = sessionTracker.activeSessionId
+        val count = sessionTracker.candidateSyntheticCount
+        val explLine = if (!explanation.isNullOrBlank()) "Signal: $explanation\n" else ""
+        explanationTextView?.text = "${explLine}RawNet2: $r2\nECAPA: $ec\nConfidence: $conf\nEvidence windows: $count confirmed\nLatency: ${lat}ms\nSession: #$sessId"
+    }
+
     private fun updateOverlayExplanation(explanation: String) {
-        explanationTextView?.text = "सक्रिय संकेत: $explanation"
+        updateTechnicalDetailsText(explanation)
     }
 
     /**

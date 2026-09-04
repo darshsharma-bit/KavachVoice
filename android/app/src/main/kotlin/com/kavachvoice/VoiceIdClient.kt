@@ -203,11 +203,16 @@ class VoiceIdClient(private val context: Context) {
 
                     val json = JSONObject(responseStr)
                     val verdict = json.optString("verdict", "UNCERTAIN")
-                    val confidence = json.optDouble("confidence", 0.0).toFloat()
-                    val calibratedScore = json.optDouble("calibrated_score", 0.0).toFloat()
-                    val rawnet2Score = json.optDouble("rawnet2_score", 0.0).toFloat()
-                    val ecapaScore = json.optDouble("ecapa_score", 0.0).toFloat()
-                    val latencyMs = json.optDouble("latency_ms", (System.currentTimeMillis() - t0).toDouble()).toFloat()
+                    val rawConf = json.optDouble("confidence", 0.0).toFloat()
+                    val confidence = if (rawConf.isNaN() || rawConf.isInfinite()) 0.0f else rawConf.coerceIn(0.0f, 1.0f)
+                    val rawCal = json.optDouble("calibrated_score", 0.0).toFloat()
+                    val calibratedScore = if (rawCal.isNaN() || rawCal.isInfinite()) 0.0f else rawCal.coerceIn(0.0f, 1.0f)
+                    val rawR2 = json.optDouble("rawnet2_score", 0.0).toFloat()
+                    val rawnet2Score = if (rawR2.isNaN() || rawR2.isInfinite()) 0.0f else rawR2.coerceIn(0.0f, 1.0f)
+                    val rawEc = json.optDouble("ecapa_score", 0.0).toFloat()
+                    val ecapaScore = if (rawEc.isNaN() || rawEc.isInfinite()) 0.0f else rawEc.coerceIn(0.0f, 1.0f)
+                    val rawLat = json.optDouble("latency_ms", (System.currentTimeMillis() - t0).toDouble()).toFloat()
+                    val latencyMs = if (rawLat.isNaN() || rawLat.isInfinite() || rawLat < 0) 0.0f else rawLat
 
                     Log.i(TAG, "VoiceID: REAL inference response (session #$sessionId): verdict=$verdict, conf=$confidence, rawnet2=$rawnet2Score, ecapa=$ecapaScore, latency=${latencyMs}ms")
 

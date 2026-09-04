@@ -98,8 +98,7 @@ class CallSessionTracker {
                 isSyntheticConfirmed = false
                 confirmedConfidence = 0.0f
             } else {
-                // UNCERTAIN or UNAVAILABLE fails safe: decrement candidate counter and clear confirmation
-                if (candidateSyntheticCount > 0) candidateSyntheticCount--
+                // UNCERTAIN or UNAVAILABLE fails safe: candidate does not increase and cannot confirm
                 if (candidateSyntheticCount < 2) {
                     isSyntheticConfirmed = false
                     confirmedConfidence = 0.0f

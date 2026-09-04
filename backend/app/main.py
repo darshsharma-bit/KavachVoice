@@ -110,8 +110,8 @@ app.add_middleware(
 )
 
 
-# Calibration parameters (Platt Scaling on log-odds: P = 1 / (1 + exp(-(logit - beta) / T)))
-# Default: T=1.0, beta=0.0 preserves identity probability mapping until NLL fitting
+# Calibration parameters currently use the identity configuration (T=1.0, beta=0.0); empirical task-specific calibration has not been fitted.
+# Maps log-odds logit with temperature T and bias beta: P = 1 / (1 + exp(-(logit - beta) / T))
 CALIB_T_RAWNET2 = 1.0
 CALIB_BETA_RAWNET2 = 0.0
 CALIB_T_ECAPA = 1.0
@@ -120,7 +120,8 @@ CALIB_BETA_ECAPA = 0.0
 
 def calibrate(raw_score: float, T: float, beta: float) -> float:
     """
-    Platt scaling: maps raw probability score z in (0, 1) to calibrated probability P(y=1|z).
+    Score scaling function: maps raw score z in (0, 1) to probability P(y=1|z).
+    Calibration parameters currently use the identity configuration (T=1.0, beta=0.0); empirical task-specific calibration has not been fitted.
     Converts z to log-odds logit = ln(z / (1 - z)) before applying temperature and bias scaling:
     P = 1 / (1 + exp(-(logit - beta) / T))
     """
@@ -190,8 +191,8 @@ async def analyze(file: UploadFile = File(...)):
 
     # Speech-energy gate: evaluate RMS, peak amplitude, duration, and finite samples
     # Prevents silence or ambient room noise from being sent to RawNet2 and classified as synthetic (91%)
-    ENERGY_RMS_THRESHOLD = 0.025
-    PEAK_THRESHOLD = 0.05
+    ENERGY_RMS_THRESHOLD = 0.018
+    PEAK_THRESHOLD = 0.040
     MIN_DURATION_S = 0.5
 
     is_finite = bool(np.all(np.isfinite(waveform))) if len(waveform) > 0 else False
@@ -237,13 +238,14 @@ async def analyze(file: UploadFile = File(...)):
         ecapa_raw = 0.5
         ecapa_ok = False
 
-    # Apply Platt calibration to individual model outputs
+    # Weighted multi-model score fusion (75% RawNet2 / 25% ECAPA) with decision boundaries.
+    # Calibration parameters currently use the identity configuration (T=1.0, beta=0.0); empirical task-specific calibration has not been fitted.
     p_rawnet2 = calibrate(rawnet2_raw, CALIB_T_RAWNET2, CALIB_BETA_RAWNET2)
     p_ecapa = calibrate(ecapa_raw, CALIB_T_ECAPA, CALIB_BETA_ECAPA)
 
-    # Section 3.3 Ensemble weighting with single-model graceful degradation fallback
+    # Multi-model fusion: RawNet2 is primary anti-spoof signal, ECAPA is auxiliary acoustic consistency
     if rawnet2_ok and ecapa_ok:
-        p_combined = 0.55 * p_rawnet2 + 0.45 * p_ecapa
+        p_combined = 0.75 * p_rawnet2 + 0.25 * p_ecapa
         uncertainty = 0.05
     elif rawnet2_ok:
         p_combined = p_rawnet2
@@ -293,7 +295,7 @@ async def analyze(file: UploadFile = File(...)):
 
 def _run_rawnet2(waveform: np.ndarray, sr: int) -> float:
     """
-    Evaluates raw waveform sinc-convolution features for synthetic audio artifacts.
+    Evaluates raw-waveform anti-spoofing model utilizing learned Sinc-convolutions.
     Computes purely from acoustic input (waveform, sr) with zero dependency on filename or metadata.
     Uses ASVspoof 2021 RawNet2 baseline weights when loaded.
     """
@@ -314,7 +316,8 @@ def _run_rawnet2(waveform: np.ndarray, sr: int) -> float:
 
         nb_samples = 64000
         if len(waveform) < nb_samples:
-            waveform = np.pad(waveform, (0, nb_samples - len(waveform)))
+            repeat = int(np.ceil(nb_samples / max(len(waveform), 1)))
+            waveform = np.tile(waveform, repeat)[:nb_samples]
         else:
             waveform = waveform[:nb_samples]
 
@@ -351,7 +354,8 @@ def _run_ecapa(waveform: np.ndarray, sr: int) -> float:
             sr = 16000
 
         if len(waveform) < 32000:
-            waveform = np.pad(waveform, (0, 32000 - len(waveform)))
+            repeat = int(np.ceil(32000 / max(len(waveform), 1)))
+            waveform = np.tile(waveform, repeat)[:32000]
 
         mid = len(waveform) // 2
         w1 = torch.tensor(waveform[:mid], dtype=torch.float32).unsqueeze(0)
@@ -476,13 +480,13 @@ def _generate_pdf(result: "AnalysisResult") -> None:
                 ["Field", "Value"],
                 ["Session ID",              result.session_id],
                 ["Timestamp (IST)",         ist_now],
-                ["Calibrated Verdict",      f"{result.verdict} (P={result.calibrated_score * 100:.1f}% ± {result.uncertainty_sigma * 100:.1f}%)"],
+                ["Ensemble Verdict",        f"{result.verdict} (P={result.calibrated_score * 100:.1f}% ± {result.uncertainty_sigma * 100:.1f}%)"],
                 ["Decision Confidence",     f"{result.confidence * 100:.2f}%"],
-                ["RawNet2 Score (Raw/Cal)", f"{result.rawnet2_score * 100:.1f}% / {result.rawnet2_calibrated * 100:.1f}%"],
-                ["ECAPA Score (Raw/Cal)",   f"{result.ecapa_score * 100:.1f}% / {result.ecapa_calibrated * 100:.1f}%"],
+                ["RawNet2 Score",           f"{result.rawnet2_score * 100:.1f}%"],
+                ["ECAPA Score",             f"{result.ecapa_score * 100:.1f}%"],
                 ["Inference Latency",       f"{result.latency_ms:.1f} ms"],
                 ["Audio SHA-256",           result.audio_sha256],
-                ["Model Pipeline",          "Dual-Stream Ensemble (RawNet2 + ECAPA-TDNN) with Platt Scaling"],
+                ["Model Pipeline",          "Weighted Multi-Model Score Fusion (75% RawNet2 / 25% ECAPA) with Decision Boundaries"],
             ],
             colWidths=[5*cm, 12*cm],
             style=TableStyle([

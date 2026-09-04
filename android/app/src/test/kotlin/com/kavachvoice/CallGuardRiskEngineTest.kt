@@ -14,11 +14,12 @@ import org.junit.Test
  * 2. no call + UPI = GREEN
  * 3. call + no UPI = GREEN
  * 4. call + UPI = ORANGE
- * 5. call + UPI + fraud = RED
+ * 5. call + UPI + fraud = ORANGE (credential warning; keywords alone never trigger RED)
  * 6. call + UPI + urgency = ORANGE
- * 7. call + UPI + fraud + urgency = RED
- * 8. unrelated notification/window event = no alert
- * 9. demo trigger = deterministic fraud signal
+ * 7. call + UPI + fraud + urgency = ORANGE (urgent credential warning; keywords alone never trigger RED)
+ * 8. call + UPI + confirmed clone = RED (high-confidence synthetic-voice intervention)
+ * 9. unrelated notification/window event = no alert
+ * 10. demo trigger = deterministic fraud signal
  */
 class CallGuardRiskEngineTest {
 
@@ -277,5 +278,139 @@ class CallGuardRiskEngineTest {
         assertEquals("Synthetic voice during call without UPI must stay GREEN ambient monitoring", CallGuardRiskLevel.GREEN, verdict.level)
         assertFalse(verdict.isAlertActive)
         assertTrue(verdict.explanation.contains("synthetic voice detected, but no payment app foregrounded"))
+    }
+
+    @Test
+    fun testVoiceId_CallActive_WithUpi_BackendUnavailable_ReturnsOrange() {
+        // When VoiceID backend is unreachable, voiceCloneDetected remains false and state stays ORANGE
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            voiceCloneDetected = false,
+            voiceCloneConfidence = 0.0f
+        )
+        val verdict = riskEngine.evaluate(state)
+
+        assertEquals("Call + UPI + Backend Unavailable must fail safe to ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+        assertTrue(verdict.isAlertActive)
+        assertFalse(verdict.explanation.contains("cloned", ignoreCase = true))
+    }
+
+    // =========================================================================
+    // SECTION 4 ADVERSARIAL FALSE-POSITIVE TESTING (A through Q)
+    // =========================================================================
+
+    @Test
+    fun testAdversarialA_Human_BhaiUpiKarDe() {
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            fraudKeywordDetected = false,
+            urgencyDetected = false,
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial A: 'bhai UPI kar de' must remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+    }
+
+    @Test
+    fun testAdversarialB_Human_OtpBatao() {
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            fraudKeywordDetected = true,
+            detectedFraudKeywords = listOf("otp", "batao"),
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial B: 'OTP batao' alone must NEVER trigger RED (remains ORANGE)", CallGuardRiskLevel.ORANGE, verdict.level)
+    }
+
+    @Test
+    fun testAdversarialC_Human_JaldiPaymentKar() {
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.google.android.apps.nbu.paisa.user",
+            urgencyDetected = true,
+            detectedUrgencyKeywords = listOf("jaldi", "payment"),
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial C: 'jaldi payment kar' urgency must remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+    }
+
+    @Test
+    fun testAdversarialD_Human_GooglePayKholo() {
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.google.android.apps.nbu.paisa.user",
+            fraudKeywordDetected = false,
+            urgencyDetected = false,
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial D: 'Google Pay kholo' must remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+    }
+
+    @Test
+    fun testAdversarialE_Human_PhonePePeBhejDe() {
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            fraudKeywordDetected = false,
+            urgencyDetected = false,
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial E: 'PhonePe pe bhej de' must remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+    }
+
+    @Test
+    fun testAdversarialF_Human_HaanHaanAbhiKarRahaHoon() {
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "net.one97.paytm",
+            fraudKeywordDetected = false,
+            urgencyDetected = false,
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial F: 'haan haan abhi kar raha hoon' must remain ORANGE", CallGuardRiskLevel.ORANGE, verdict.level)
+    }
+
+    @Test
+    fun testAdversarialG_to_J_HumanAcousticVariations_LaughingWhisperingLoudContinuous() {
+        // Genuine acoustic variations: laughing, whispering, speaking loudly, continuous speech
+        // All produce voiceCloneDetected = false (RawNet2 < threshold)
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            voiceCloneDetected = false
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial G-J: Human acoustic variations must never trigger RED", CallGuardRiskLevel.ORANGE, verdict.level)
+    }
+
+    @Test
+    fun testAdversarialK_to_Q_EnvironmentalNoiseAndSilence_NeverRed() {
+        // Silence, fan noise, keyboard, room noise, music, short audio bursts, speech with noise
+        // Energy gating / VAD marks low energy as UNCERTAIN or genuine ambient -> voiceCloneDetected = false
+        val state = CallGuardState(
+            callActive = true,
+            upiForeground = true,
+            currentPackage = "com.phonepe.app",
+            voiceCloneDetected = false,
+            voiceCloneConfidence = 0.0f
+        )
+        val verdict = riskEngine.evaluate(state)
+        assertEquals("Adversarial K-Q: Environmental noise & silence must never trigger RED", CallGuardRiskLevel.ORANGE, verdict.level)
     }
 }

@@ -40,11 +40,23 @@ class KeywordScanner(
     private val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioEncoding)
     private val bufferSize = if (minBufferSize > 0) minBufferSize * 2 else 4096
 
-    // Bounded rolling buffer for VoiceID RawNet2 (4.0 seconds = 64,000 samples @ 16kHz mono)
+    // Bounded rolling buffer for VoiceID RawNet2 (2.0 seconds = 32,000 samples @ 16kHz mono, 800ms hop)
     companion object {
-        const val WINDOW_SAMPLES = 64000
-        // -32 dBFS threshold for ambient voice activity detection
-        private const val SPEECH_RMS_THRESHOLD = 0.025f
+        const val SAMPLE_RATE = 16000
+        const val LIVE_WINDOW_MS = 2000 // 2.0s window
+        const val LIVE_HOP_MS = 800 // 800ms hop interval (~1.25 Hz dispatch)
+        const val WINDOW_SAMPLES = (SAMPLE_RATE * LIVE_WINDOW_MS) / 1000 // 32,000 samples
+        const val HOP_SAMPLES = (SAMPLE_RATE * LIVE_HOP_MS) / 1000 // 12,800 samples
+
+        // Frame-level VAD parameters
+        const val FRAME_SIZE_MS = 20 // 20ms frame
+        const val FRAME_SAMPLES = (SAMPLE_RATE * FRAME_SIZE_MS) / 1000 // 320 samples
+        const val FRAME_ENERGY_THRESHOLD = 0.012f // frame noise floor (~-38 dBFS)
+
+        // Window-level speech activity gate (Phase 4)
+        const val MIN_SPEECH_RMS = 0.018f // minimum overall RMS energy
+        const val MIN_SPEECH_PEAK = 0.040f // minimum peak amplitude
+        const val MIN_SPEECH_DURATION_MS = 500 // minimum active speech duration within 2.0s window
     }
 
     private val rollingBuffer = ShortArray(WINDOW_SAMPLES)
@@ -55,7 +67,7 @@ class KeywordScanner(
     // Analysis worker job for periodic VoiceID window emission
     private var analysisJob: Job? = null
     var onAudioWindowAvailable: ((ShortArray) -> Unit)? = null
-    var onAudioWindowAvailableWithStats: ((ShortArray, Int, Float, Float, Boolean) -> Unit)? = null
+    var onAudioWindowAvailableWithStats: ((ShortArray, Int, Float, Float, Boolean, Int, Int) -> Unit)? = null
 
     // Speech presence metrics (for diagnostic VAD, NOT lexical classification)
     @Volatile var currentRms: Float = 0f
@@ -135,9 +147,9 @@ class KeywordScanner(
                     val (rms, peak) = computePcm16RmsAndPeak(shortBuffer, readSamples)
                     currentRms = rms
                     currentPeak = peak
-                    isSpeechPresent = rms > SPEECH_RMS_THRESHOLD
+                    isSpeechPresent = rms > MIN_SPEECH_RMS
 
-                    // Write into bounded circular rolling buffer for VoiceID (64,000 samples = 4.0s)
+                    // Write into bounded circular rolling buffer for VoiceID (32,000 samples = 2.0s)
                     synchronized(bufferLock) {
                         for (i in 0 until readSamples) {
                             rollingBuffer[writeHead] = shortBuffer[i]
@@ -148,38 +160,45 @@ class KeywordScanner(
                 }
             }
 
-            // Analysis Worker: Periodically dispatches 4-second audio windows to VoiceIdClient
-            // Acoustic speech energy gate: only emits when speech activity is detected (RMS > SPEECH_RMS_THRESHOLD)
+            // Analysis Worker: Periodically dispatches 2.0-second audio windows every 800ms to VoiceIdClient
+            // Robust lightweight frame-based VAD (Phase 4): only emits when sufficient speech is present
             analysisJob = CoroutineScope(Dispatchers.Default).launch {
                 windowCount = 0
-                // Initial accumulation delay
-                delay(4000)
+                // Initial accumulation delay for first 2.0s window
+                delay(LIVE_WINDOW_MS.toLong())
                 while (isActive && isRecording.get()) {
                     if (totalSamplesRecorded >= WINDOW_SAMPLES) {
-                        val rms = currentRms
-                        val peak = currentPeak
-                        val speech = isSpeechPresent
-                        windowCount++
-                        val winNum = windowCount
-                        val stateStr = when (recorder?.recordingState) {
-                            AudioRecord.RECORDSTATE_RECORDING -> "RECORDSTATE_RECORDING"
-                            AudioRecord.RECORDSTATE_STOPPED -> "RECORDSTATE_STOPPED"
-                            else -> "UNKNOWN"
-                        }
-                        Log.i(tag, "AudioRecord Capture: windowNumber=$winNum, state=$stateStr, samplesRecorded=$totalSamplesRecorded, RMS=$rms, peak=$peak, speechPresent=$speech")
+                        val window = getLatestAudioWindow()
+                        if (window != null) {
+                            val (rms, peak) = computePcm16RmsAndPeak(window, window.size)
+                            currentRms = rms
+                            currentPeak = peak
 
-                        if (!speech && rms < SPEECH_RMS_THRESHOLD) {
-                            Log.d(tag, "Skipping rolling window emission — silence/ambient noise (RMS=$rms < $SPEECH_RMS_THRESHOLD)")
-                        } else {
-                            val window = getLatestAudioWindow()
-                            if (window != null) {
-                                Log.d(tag, "Emitting rolling audio window #$winNum (${window.size} samples, RMS=$rms, peak=$peak, speechPresent=$speech)")
+                            // Lightweight frame-based speech activity detection (Phase 4)
+                            val activeSpeechMs = computeActiveSpeechDurationMs(window)
+                            val isSpeech = (rms >= MIN_SPEECH_RMS) &&
+                                    (peak >= MIN_SPEECH_PEAK) &&
+                                    (activeSpeechMs >= MIN_SPEECH_DURATION_MS)
+                            isSpeechPresent = isSpeech
+
+                            windowCount++
+                            val winNum = windowCount
+                            val stateStr = when (recorder?.recordingState) {
+                                AudioRecord.RECORDSTATE_RECORDING -> "RECORDSTATE_RECORDING"
+                                AudioRecord.RECORDSTATE_STOPPED -> "RECORDSTATE_STOPPED"
+                                else -> "UNKNOWN"
+                            }
+
+                            if (!isSpeech) {
+                                Log.d(tag, "VAD Gate: Window #$winNum skipped — below speech threshold (RMS=$rms, peak=$peak, activeSpeechMs=$activeSpeechMs < $MIN_SPEECH_DURATION_MS)")
+                            } else {
+                                Log.i(tag, "AudioRecord Capture: windowNumber=$winNum, state=$stateStr, samplesRecorded=$totalSamplesRecorded, RMS=$rms, peak=$peak, speechPresent=true, activeSpeechMs=$activeSpeechMs")
                                 onAudioWindowAvailable?.invoke(window)
-                                onAudioWindowAvailableWithStats?.invoke(window, winNum, rms, peak, speech)
+                                onAudioWindowAvailableWithStats?.invoke(window, winNum, rms, peak, true, LIVE_WINDOW_MS, window.size)
                             }
                         }
                     }
-                    delay(3500) // Emit windows with ~0.5s overlap
+                    delay(LIVE_HOP_MS.toLong()) // Emit windows with ~1.2s overlap every 800ms
                 }
             }
         }
@@ -270,6 +289,32 @@ class KeywordScanner(
         CoroutineScope(Dispatchers.Main).launch {
             onDetected(listOf("otp", "बताइए", "jaldi", "तुरंत"))
         }
+    }
+
+    /**
+     * Frame-based Voice Activity Detection (VAD).
+     * Partitions window into 20ms frames and evaluates energy above the adaptive noise floor.
+     * Returns total active speech duration in milliseconds.
+     */
+    private fun computeActiveSpeechDurationMs(window: ShortArray): Int {
+        val frameSamples = FRAME_SAMPLES
+        val numFrames = window.size / frameSamples
+        if (numFrames <= 0) return 0
+        var activeFrames = 0
+
+        for (f in 0 until numFrames) {
+            val offset = f * frameSamples
+            var sumSquares = 0.0
+            for (i in 0 until frameSamples) {
+                val s = window[offset + i] / 32768.0f
+                sumSquares += (s * s)
+            }
+            val frameRms = sqrt(sumSquares / frameSamples).toFloat()
+            if (frameRms >= FRAME_ENERGY_THRESHOLD) {
+                activeFrames++
+            }
+        }
+        return activeFrames * FRAME_SIZE_MS
     }
 
     /**

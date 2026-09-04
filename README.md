@@ -47,8 +47,8 @@ KavachVoice operates across **two tightly coupled deployments**:
 │  │ Layer 2: CallGuard (Fraud Trap)     │  │  │ Layer 4: Forensic Evidence & I4C     │  │
 │  │ • WindowStateChanged UPI Detection  │  │  │ • Section 65B / 63 BSA Forensic PDF  │  │
 │  │ • Cellular (SIM) + WhatsApp (VoIP)  │  │  │ • Cryptographic SHA-256 Audio Chain  │  │
-│  │ • On-Device IndicASR Keyword Spot   │  │  │ • CERT-In Incident Dossier Ready     │  │
-│  │ • Instant Red WindowManager Overlay │  │  │ • Real-time WebSocket Alert Broadcast│  │
+│  │ • On-Device Keyword & Cadence Spot  │  │  │ • CERT-In Incident Dossier Ready     │  │
+│  │ • Contextual Orange / Red Overlay   │  │  │ • Real-time WebSocket Alert Broadcast│  │
 │  └─────────────────────────────────────┘  │  └──────────────────────────────────────┘  │
 └───────────────────────────────────────────┴────────────────────────────────────────────┘
 ```
@@ -65,16 +65,28 @@ KavachVoice operates across **two tightly coupled deployments**:
 
 ### Layer 2 — CallGuard (Contextual Financial Interception)
 * **The Philosophy:** Deepfakes only succeed financially when the victim executes a transaction. CallGuard correlates contextual behavior:
-  $$\text{Risk Score} = w_1(\text{Call Active}) + w_2(\text{UPI Foregrounded}) + w_3(\text{Urgency Keyword}) + w_4(\text{Screen Share})$$
+  $$\text{Risk Score} = w_1(\text{Call Active}) + w_2(\text{UPI Foregrounded}) + w_3(\text{Urgency Keyword}) + w_4(\text{Voice Clone})$$
+  *(Note on alert behavior: Call + UPI + credential/urgency keywords trigger an **ORANGE** contextual warning overlay; keywords alone never trigger RED. High-priority **RED** intervention is strictly reserved for confirmed synthetic voice via 2-window temporal confirmation.)*
 * **Universal Call Detection:** Simultaneously monitors `TelephonyManager.CALL_STATE_OFFHOOK` (cellular SIM calls) and `AudioManager.MODE_IN_COMMUNICATION` (WhatsApp, Telegram, Signal, Google Meet).
 * **Targeted UPI Whitelist:** Intercepts window state transitions (`AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED`) across Google Pay, PhonePe, Paytm, BHIM, and Amazon Pay.
-* **On-Device Indic Speech Spotter:** Lightweight IndicASR (<30MB quantized TFLite) listening for high-urgency Hindi, Hinglish, and regional scam lexicons (*"OTP bataiye"*, *"turant"*, *"account band"*, *"police/arrest"*).
-* **Immediate Red Block:** When multi-signal convergence occurs, a native `WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY` red banner overrides the payment screen, mandating a 30-second security cooldown.
+* **Acoustic Microphone Pipeline:** Processes 2.0-second rolling audio windows with an 800ms hop interval and frame-based VAD (requiring $\ge 500\text{ms}$ active speech) to prevent silence/noise classification.
+* **Temporal Confirmation:** Strictly enforces a 2-consecutive-window confirmation policy for live microphone sessions before escalating to RED.
+* **Bilingual Alert System:** Native `WindowManager` overlay with clean English and Hindi sections (zero Hinglish), one-click `1930` cyber helpline dialer, and collapsible technical metrics.
+
+### 📱 Android Platform Architecture & Acoustic Ingestion Reality
+> **Transparent Architectural Disclosure:**
+> Under standard Android security architecture (AOSP / Android 10–14), third-party unprivileged applications running in user-space cannot arbitrarily obtain the private PCM downlink stream of another application's cellular or VoIP call (e.g. WhatsApp downlink audio).
+> 
+> To overcome this platform boundary transparently and legally:
+> - **Layer 1 (OEM / HAL Path):** Represents the architectural blueprint for controlled hardware / OEM system-level integration directly inside the audio HAL (`AudioFlinger` / DSP downlink path).
+> - **Layer 2 (Stock Android User-Space Prototype):** Operates via authoritative acoustic microphone capture (`AudioRecord.MIC`) during an active call session. Remote caller speech must be played via speakerphone or loudspeaker to be acoustically captured by the microphone.
+> - **Zero Call Persistence:** Microphone hardware is strictly allocated *only* while a phone call is active and released immediately upon call termination. No caller audio is ever saved to disk or transmitted to public cloud providers.
 
 ### Layer 3 — VoiceID SDK (Enterprise Anti-Spoofing Core)
-* **Model Ensemble:**
-  1. **RawNet2:** Directly operates on raw temporal audio waveforms via learned Sinc-filters to extract phase anomalies and synthetic vocoder boundary artifacts (~2.5% EER on ASVspoof 2021).
+* **Model Ensemble & Score Fusion:**
+  1. **RawNet2:** A raw-waveform anti-spoofing model utilizing learned Sinc-convolutions and residual blocks (~2.5% EER on ASVspoof 2021).
   2. **ECAPA-TDNN:** Squeeze-and-Excitation Res2Net blocks capturing long-term multi-scale spectral speaker embeddings (~1.0% EER on VoxCeleb1).
+  3. **Decision Engine:** Weighted multi-model score fusion (75% RawNet2 / 25% ECAPA) with decision boundaries. Calibration parameters currently use the identity configuration ($T=1.0, \beta=0.0$); empirical task-specific calibration has not been fitted.
 * **Inference Pipeline:** Evaluated concurrently via Python `asyncio.gather()` on multi-threaded CPU architectures in **~310ms**, well under the 800ms contact-center SLA threshold.
 * **Firewall-Resilient Transport:** Real-time push via WebSocket with automatic fallback to Server-Sent Events (SSE) and HTTP long-polling for legacy enterprise banking firewalls.
 
@@ -91,7 +103,7 @@ KavachVoice operates across **two tightly coupled deployments**:
 |---|---|---|---|
 | **1** | **The Clone Attack** | Play a terrifyingly accurate 15-second AI clone of a team member generated via ElevenLabs. | Shows how defenseless conventional listeners and IVRs are against modern synthetic speech. |
 | **2** | **The Acoustic Shield** | Run the protected voice (VoiceArmor active) through the cloning pipeline. The synthesized result is unintelligible static. | Live spectrogram diff: visual and audible proof that UAP destroys neural vocoder synthesis. |
-| **3** | **The UPI Trap** | On a live Android phone: initiate an active call, open Google Pay, and speak *"OTP bataiye jaldi"*. | **Within 1.5 seconds**, a high-priority Red Emergency Overlay covers GPay and blocks the action. |
+| **3** | **The UPI Trap** | On a live Android phone: initiate an active call, open Google Pay, and speak *"OTP bataiye jaldi"*. | Immediate **Orange Credential Warning Overlay** alerts user; when cloned voice is confirmed via 2-window temporal confirmation, **Red Emergency Overlay** intervenes with one-click 1930 helpline dialer. |
 | **4** | **The Enterprise Catch** | Drag the attack audio onto the React Bank Dashboard. | Instant **`SYNTHETIC (96.4%)`** alert fires via WebSocket; 1-click download of the court-admissible Section 65B PDF report. |
 
 ---

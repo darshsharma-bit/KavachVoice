@@ -49,11 +49,18 @@ data class CallGuardVerdict(
  * - no call + UPI                -> GREEN (Benign payment)
  * - call + no UPI                -> GREEN / MONITORING (Ambient observation)
  * - call + UPI                   -> ORANGE (Elevated risk context)
- * - call + UPI + fraud signal    -> RED (Direct scam intervention)
- * - call + UPI + urgency only    -> ORANGE (Elevated risk context)
- * - call + UPI + fraud + urgency -> RED (High-confidence scam intervention)
+ * - call + UPI + fraud signal    -> ORANGE
+ *   (Credential warning; keywords alone never trigger RED)
  *
- * Rule: Keyword or urgency signal alone (without active call AND UPI) NEVER produces RED.
+ * - call + UPI + urgency only    -> ORANGE (Elevated risk context)
+ *
+ * - call + UPI + fraud + urgency -> ORANGE
+ *   (Urgent credential warning; keywords alone never trigger RED)
+ *
+ * - call + UPI + confirmed clone -> RED
+ *   (High-confidence synthetic-voice intervention)
+ *
+ * Rule: Only confirmed synthetic voice during Call + UPI escalates to RED. Keywords/urgency alone NEVER produce RED.
  * Every ORANGE/RED alert provides a truthful explanation derived strictly from active signals.
  */
 class CallGuardRiskEngine(
