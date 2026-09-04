@@ -44,15 +44,60 @@ async def lifespan(app: FastAPI):
     log.info("Shutting down")
 
 
+def _find_checkpoint(filename: str) -> Path | None:
+    candidates = [
+        Path("models") / filename,
+        Path(__file__).resolve().parent.parent.parent / "models" / filename,
+        Path(__file__).resolve().parent.parent / "models" / filename,
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
 def _load_models():
-    rawnet2_path = Path("models/rawnet2.pt")
-    ecapa_path = Path("models/ecapa_tdnn.pt")
-    rawnet2 = torch.load(rawnet2_path, map_location="cpu") if rawnet2_path.exists() else None
-    ecapa = torch.load(ecapa_path, map_location="cpu") if ecapa_path.exists() else None
-    if rawnet2:
-        rawnet2.eval()
-    if ecapa:
-        ecapa.eval()
+    # 1. Load RawNet2 (ASVspoof 2021 pre-trained anti-spoofing baseline)
+    rawnet2 = None
+    rawnet2_path = _find_checkpoint("rawnet2.pt")
+    if rawnet2_path:
+        try:
+            from app.rawnet2_model import RawNet
+            d_args = {
+                'filts': [20, [20, 20], [20, 128], [128, 128]],
+                'first_conv': 1024,
+                'in_channels': 1,
+                'gru_node': 1024,
+                'nb_gru_layer': 3,
+                'nb_fc_node': 1024,
+                'nb_classes': 2
+            }
+            model = RawNet(d_args, device='cpu')
+            state_dict = torch.load(str(rawnet2_path), map_location='cpu')
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            rawnet2 = model
+            log.info(f"Loaded RawNet2 model from {rawnet2_path}")
+        except Exception as e:
+            log.error(f"Failed to load RawNet2: {e}")
+
+    # 2. Load ECAPA-TDNN (SpeechBrain VoxCeleb pre-trained embedding model repurposed for temporal stability)
+    ecapa = None
+    ecapa_path = _find_checkpoint("ecapa_tdnn.pt")
+    if ecapa_path:
+        try:
+            from speechbrain.lobes.models.ECAPA_TDNN import ECAPA_TDNN
+            import torchaudio.transforms as T
+            model = ECAPA_TDNN(input_size=80, channels=[1024, 1024, 1024, 1024, 3072], lin_neurons=192)
+            state_dict = torch.load(str(ecapa_path), map_location='cpu')
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            mel_trans = T.MelSpectrogram(sample_rate=16000, n_fft=400, win_length=400, hop_length=160, n_mels=80)
+            ecapa = (model, mel_trans)
+            log.info(f"Loaded ECAPA-TDNN model from {ecapa_path}")
+        except Exception as e:
+            log.error(f"Failed to load ECAPA-TDNN: {e}")
+
     return rawnet2, ecapa
 
 
@@ -144,14 +189,14 @@ async def analyze(file: UploadFile = File(...)):
     rawnet2_ok = True
     ecapa_ok = True
     try:
-        rawnet2_raw = await asyncio.wait_for(asyncio.to_thread(_run_rawnet2, waveform, sr), timeout=0.35)
+        rawnet2_raw = await asyncio.wait_for(asyncio.to_thread(_run_rawnet2, waveform, sr), timeout=2.0)
     except Exception as e:
         log.warning(f"RawNet2 stream timeout/failed: {e}")
         rawnet2_raw = 0.5
         rawnet2_ok = False
 
     try:
-        ecapa_raw = await asyncio.wait_for(asyncio.to_thread(_run_ecapa, waveform, sr), timeout=0.35)
+        ecapa_raw = await asyncio.wait_for(asyncio.to_thread(_run_ecapa, waveform, sr), timeout=2.0)
     except Exception as e:
         log.warning(f"ECAPA stream timeout/failed: {e}")
         ecapa_raw = 0.5
@@ -215,6 +260,7 @@ def _run_rawnet2(waveform: np.ndarray, sr: int) -> float:
     """
     Evaluates raw waveform sinc-convolution features for synthetic audio artifacts.
     Computes purely from acoustic input (waveform, sr) with zero dependency on filename or metadata.
+    Uses ASVspoof 2021 RawNet2 baseline weights when loaded.
     """
     if _rawnet2 is None:
         if len(waveform) == 0:
@@ -222,16 +268,36 @@ def _run_rawnet2(waveform: np.ndarray, sr: int) -> float:
         energy = float(np.mean(np.abs(waveform)))
         zcr = float(np.mean(np.abs(np.diff(np.sign(waveform)))) / 2.0)
         return float(np.clip(0.3 * energy * 10.0 + 0.7 * zcr * 2.5, 0.05, 0.95))
-    with torch.no_grad():
-        x = torch.tensor(waveform).unsqueeze(0)
-        score = _rawnet2(x)
-        return float(torch.sigmoid(score).item())
+
+    try:
+        if sr != 16000:
+            import torchaudio.functional as AF
+            t_wav = torch.tensor(waveform, dtype=torch.float32).unsqueeze(0)
+            t_wav = AF.resample(t_wav, sr, 16000).squeeze(0).numpy()
+            waveform = t_wav
+            sr = 16000
+
+        nb_samples = 64000
+        if len(waveform) < nb_samples:
+            waveform = np.pad(waveform, (0, nb_samples - len(waveform)))
+        else:
+            waveform = waveform[:nb_samples]
+
+        with torch.no_grad():
+            x = torch.tensor(waveform, dtype=torch.float32).unsqueeze(0)
+            out = _rawnet2(x)
+            probs = torch.softmax(out, dim=-1)
+            p_spoof = float(probs[0, 0].item())
+            return float(np.clip(p_spoof, 0.001, 0.999))
+    except Exception as e:
+        log.error(f"RawNet2 inference error: {e}")
+        return 0.5
 
 
 def _run_ecapa(waveform: np.ndarray, sr: int) -> float:
     """
     Evaluates temporal speaker embedding consistency and spectral resonance stability.
-    Computes purely from acoustic input (waveform, sr) with zero dependency on filename or metadata.
+    Uses SpeechBrain ECAPA-TDNN VoxCeleb embeddings to measure temporal stability anomaly.
     """
     if _ecapa is None:
         if len(waveform) == 0:
@@ -239,10 +305,36 @@ def _run_ecapa(waveform: np.ndarray, sr: int) -> float:
         energy = float(np.mean(np.abs(waveform)))
         rms = float(np.sqrt(np.mean(waveform ** 2)))
         return float(np.clip(energy * 8.0 + rms * 2.0, 0.05, 0.95))
-    with torch.no_grad():
-        x = torch.tensor(waveform).unsqueeze(0)
-        score = _ecapa(x)
-        return float(torch.sigmoid(score).item())
+
+    try:
+        model, mel_trans = _ecapa
+        if sr != 16000:
+            import torchaudio.functional as AF
+            t_wav = torch.tensor(waveform, dtype=torch.float32).unsqueeze(0)
+            t_wav = AF.resample(t_wav, sr, 16000).squeeze(0).numpy()
+            waveform = t_wav
+            sr = 16000
+
+        if len(waveform) < 32000:
+            waveform = np.pad(waveform, (0, 32000 - len(waveform)))
+
+        mid = len(waveform) // 2
+        w1 = torch.tensor(waveform[:mid], dtype=torch.float32).unsqueeze(0)
+        w2 = torch.tensor(waveform[mid:], dtype=torch.float32).unsqueeze(0)
+
+        with torch.no_grad():
+            spec1 = torch.log(mel_trans(w1) + 1e-6).transpose(1, 2)
+            spec2 = torch.log(mel_trans(w2) + 1e-6).transpose(1, 2)
+            e1 = model(spec1).squeeze()
+            e2 = model(spec2).squeeze()
+            cos_sim = float(torch.nn.functional.cosine_similarity(e1.unsqueeze(0), e2.unsqueeze(0)).item())
+
+        z = (cos_sim - 0.90) * 15.0
+        p_anomaly = 1.0 / (1.0 + np.exp(-z))
+        return float(np.clip(p_anomaly, 0.001, 0.999))
+    except Exception as e:
+        log.error(f"ECAPA inference error: {e}")
+        return 0.5
 
 
 @app.get("/api/v1/report/{session_id}")
@@ -256,8 +348,12 @@ async def get_report(session_id: str):
 @app.post("/api/v1/dossier/generate")
 async def generate_dossier(req: DossierRequest):
     """
-    Layer 4: Generates an official I4C forensic incident dossier certified under
-    Section 65B Indian Evidence Act / Section 63 BSA 2023.
+    Layer 4: Generates an I4C-style forensic incident dossier.
+    DEMO MODE: dossier_id is a static placeholder string. No real
+    SAHYOG/CERT-In API integration exists — there is currently no
+    public intake endpoint available to a student team. Human-in-
+    the-loop CISO authorization is simulated in the dashboard, not
+    connected to a live government system.
     """
     sess_id = req.session_id or req.call_id or str(uuid.uuid4())
     pdf_filename = f"{sess_id}.pdf"

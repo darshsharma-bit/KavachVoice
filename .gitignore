@@ -1,7 +1,10 @@
 # models/ and demo/ — large binary files, weights, audio clips
-models/uap/*.bin
-models/voiceid/*.pt
-models/voiceid/*.pth
+models/**/*.bin
+models/**/*.pt
+models/**/*.pth
+models/*.pt
+models/*.pth
+demo/**/*.wav
 demo/*.wav
 demo/*.mp4
 demo/*.mp3
